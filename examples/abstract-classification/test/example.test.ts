@@ -35,7 +35,7 @@ describe('abstract-classification project', () => {
     for await (const row of readJsonl(samplePath)) {
       const { id, ...payload } = row;
       expect(parse(TaskId, id).ok).toBe(true);
-      expect(checkTaskPayload(project.input_schema as TSchema, { payload })).toEqual([]);
+      expect(checkTaskPayload(project.input_schema, { payload })).toEqual([]);
       expect(renderPrompt(project.prompt, payload).user).toContain(String(payload['title']));
       count++;
     }
