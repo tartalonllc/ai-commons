@@ -9,3 +9,4 @@ coverage/
 *.sqlite
 *.sqlite-journal
 *.db
+.claude/worktrees/
