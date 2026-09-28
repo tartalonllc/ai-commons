@@ -45,6 +45,24 @@ importers:
         specifier: workspace:*
         version: link:../../protocol
 
+  packages/providers/ollama:
+    dependencies:
+      '@ai-commons/protocol':
+        specifier: workspace:*
+        version: link:../../protocol
+      '@ai-commons/provider-core':
+        specifier: workspace:*
+        version: link:../core
+
+  packages/providers/openai:
+    dependencies:
+      '@ai-commons/protocol':
+        specifier: workspace:*
+        version: link:../../protocol
+      '@ai-commons/provider-core':
+        specifier: workspace:*
+        version: link:../core
+
   packages/validators:
     dependencies:
       '@ai-commons/protocol':
