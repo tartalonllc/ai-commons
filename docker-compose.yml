@@ -1,0 +1,21 @@
+services:
+  postgres:
+    image: postgres:17
+    container_name: aicommons-postgres
+    environment:
+      POSTGRES_USER: aicommons
+      POSTGRES_PASSWORD: aicommons
+      POSTGRES_DB: aicommons
+    ports:
+      - '55432:5432'
+    volumes:
+      - aicommons-pgdata:/var/lib/postgresql/data
+      - ./apps/coordinator/docker/init-test-db.sql:/docker-entrypoint-initdb.d/init-test-db.sql:ro
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U aicommons']
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  aicommons-pgdata:
