@@ -1,6 +1,5 @@
 import type { InferenceRequest } from '@ai-commons/provider-core';
 import { describe, expect, it } from 'vitest';
-import { parseRetryAfter } from '../src/http.js';
 import { OllamaProvider, stripThinking } from '../src/index.js';
 import { mockFetch, type Reply } from './mock-fetch.js';
 
@@ -121,7 +120,25 @@ describe('OllamaProvider.execute', () => {
     ['network-error', 'unavailable', true],
   ] as const)('maps %j to %s', async (reply, code, retryable) => {
     const { ollama } = provider(reply as Reply);
-    await expect(ollama.execute(request())).rejects.toMatchObject({ code, retryable });
+    await expect(ollama.execute(request())).rejects.toMatchObject({
+      code,
+      retryable,
+      billed: false,
+    });
+  });
+
+  it('reports every local failure as unbilled', async () => {
+    const replies: Reply[] = ['hang', chatReply('not json'), { status: 500 }, 'network-error'];
+    for (const reply of replies) {
+      const error = await provider(reply)
+        .ollama.execute(request({ timeout_ms: 20 }))
+        .catch((e: unknown) => e);
+      expect(error, JSON.stringify(reply)).toMatchObject({ billed: false });
+    }
+    const controller = new AbortController();
+    const pending = provider('hang').ollama.execute(request({ signal: controller.signal }));
+    controller.abort();
+    await expect(pending).rejects.toMatchObject({ code: 'cancelled', billed: false });
   });
 
   it('passes Retry-After through as retryAfterMs', async () => {
@@ -223,13 +240,5 @@ describe('helpers', () => {
   it('stripThinking only removes a leading think block', () => {
     expect(stripThinking('<think>x</think>{"a":1}')).toBe('{"a":1}');
     expect(stripThinking('{"a":"<think>x</think>"}')).toBe('{"a":"<think>x</think>"}');
-  });
-
-  it('parses Retry-After seconds and HTTP dates', () => {
-    const now = Date.parse('2026-09-28T12:00:00Z');
-    expect(parseRetryAfter('2.5', now)).toBe(2_500);
-    expect(parseRetryAfter('Mon, 28 Sep 2026 12:00:10 GMT', now)).toBe(10_000);
-    expect(parseRetryAfter('garbage', now)).toBeUndefined();
-    expect(parseRetryAfter(null, now)).toBeUndefined();
   });
 });

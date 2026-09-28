@@ -8,8 +8,6 @@ import {
   type InferenceResult,
   type ModelInfo,
   type ProviderHealth,
-} from '@ai-commons/provider-core';
-import {
   isRecord,
   normalizeBaseUrl,
   optionalCount,
@@ -17,7 +15,7 @@ import {
   safeDetail,
   statusError,
   type FetchFn,
-} from './http.js';
+} from '@ai-commons/provider-core';
 
 export const DEFAULT_OLLAMA_URL = 'http://localhost:11434';
 
@@ -87,7 +85,16 @@ export class OllamaProvider implements AIProvider {
     };
   }
 
+  /** Local inference never costs money, so every failure is reported as unbilled. */
   async execute(request: InferenceRequest): Promise<InferenceResult> {
+    try {
+      return await this.executeLocal(request);
+    } catch (error) {
+      throw error instanceof ProviderError ? error.withBilled(false) : error;
+    }
+  }
+
+  private async executeLocal(request: InferenceRequest): Promise<InferenceResult> {
     const started = performance.now();
     let res = await this.chat(request, !this.noThinkField.has(request.model));
     if (

@@ -226,9 +226,13 @@ export const ok =
   (req) => ({ output, model: req.model, duration_ms: 5, input_tokens: 50, output_tokens: 10 });
 
 export const fail =
-  (code: ConstructorParameters<typeof ProviderError>[0], message: string = code): Behavior =>
+  (
+    code: ConstructorParameters<typeof ProviderError>[0],
+    message: string = code,
+    billed?: boolean,
+  ): Behavior =>
   () => {
-    throw new ProviderError(code, message);
+    throw new ProviderError(code, message, { billed });
   };
 
 export function captureLogger(): { logger: Logger; text: () => string } {

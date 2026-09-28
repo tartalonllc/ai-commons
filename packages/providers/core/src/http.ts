@@ -1,4 +1,4 @@
-import { ProviderError } from '@ai-commons/provider-core';
+import { ProviderError } from './errors.js';
 
 export type FetchFn = typeof globalThis.fetch;
 
@@ -13,10 +13,40 @@ export interface JsonResponse {
   body: unknown;
 }
 
+/** Connection-level failures that happen before any request bytes reach the provider. */
+const NOT_SENT_CODES = new Set([
+  'ECONNREFUSED',
+  'ENOTFOUND',
+  'EAI_AGAIN',
+  'EHOSTUNREACH',
+  'ENETUNREACH',
+  'UND_ERR_CONNECT_TIMEOUT',
+]);
+
+function errorCode(value: unknown): string | undefined {
+  if (typeof value !== 'object' || value === null || !('code' in value)) return undefined;
+  return typeof value.code === 'string' ? value.code : undefined;
+}
+
+/** True when the fetch failure (or its cause chain) proves the request was never sent. */
+export function failedBeforeSend(error: unknown): boolean {
+  let current: unknown = error;
+  for (let depth = 0; depth < 5 && typeof current === 'object' && current !== null; depth++) {
+    const code = errorCode(current);
+    if (code !== undefined && NOT_SENT_CODES.has(code)) return true;
+    current = 'cause' in current ? current.cause : undefined;
+  }
+  return false;
+}
+
 /**
  * Performs a request and reads a JSON body under one combined deadline.
  * Network/abort failures become ProviderError; HTTP status is returned to the caller.
  * No cause is attached, so request details can never leak through error chains.
+ *
+ * Billing: a request cancelled before sending or refused at connection time is
+ * `billed: false`; a timeout, mid-flight cancellation, or other network failure
+ * is unknown, because the provider may already have processed it.
  */
 export async function requestJson(
   fetchFn: FetchFn,
@@ -24,7 +54,9 @@ export async function requestJson(
   init: RequestInit,
   options: CallOptions,
 ): Promise<JsonResponse> {
-  if (options.signal?.aborted) throw new ProviderError('cancelled', 'Request cancelled');
+  if (options.signal?.aborted) {
+    throw new ProviderError('cancelled', 'Request cancelled', { billed: false });
+  }
   const deadline = AbortSignal.timeout(options.timeoutMs);
   const signal = options.signal ? AbortSignal.any([options.signal, deadline]) : deadline;
 
@@ -40,12 +72,16 @@ export async function requestJson(
       }
     }
     return { status: response.status, headers: response.headers, body };
-  } catch {
+  } catch (error) {
     if (options.signal?.aborted) throw new ProviderError('cancelled', 'Request cancelled');
     if (deadline.aborted) {
       throw new ProviderError('timeout', `Request timed out after ${options.timeoutMs} ms`);
     }
-    throw new ProviderError('unavailable', 'Could not connect to provider');
+    throw new ProviderError(
+      'unavailable',
+      'Could not connect to provider',
+      failedBeforeSend(error) ? { billed: false } : undefined,
+    );
   }
 }
 
@@ -59,7 +95,11 @@ export function parseRetryAfter(value: string | null, now = Date.now()): number 
   return Math.max(0, date - now);
 }
 
-/** Maps a non-2xx HTTP status to a ProviderError. `detail` must be safe to surface. */
+/**
+ * Maps a non-2xx HTTP status to a ProviderError. `detail` must be safe to surface.
+ * 4xx responses are rejections before generation (`billed: false`); 5xx billing
+ * is unknown because the failure may have happened after generation.
+ */
 export function statusError(
   providerName: string,
   status: number,
@@ -68,18 +108,20 @@ export function statusError(
 ): ProviderError {
   const suffix = detail ? `: ${detail}` : '';
   if (status === 401 || status === 403) {
-    return new ProviderError('auth', `${providerName} rejected credentials (HTTP ${status})`);
+    return new ProviderError('auth', `${providerName} rejected credentials (HTTP ${status})`, {
+      billed: false,
+    });
   }
   if (status === 404) {
-    return new ProviderError('model_not_found', `${providerName} model not found${suffix}`);
+    return new ProviderError('model_not_found', `${providerName} model not found${suffix}`, {
+      billed: false,
+    });
   }
   if (status === 429) {
-    const retryAfterMs = parseRetryAfter(headers.get('retry-after'));
-    return new ProviderError(
-      'rate_limited',
-      `${providerName} rate limit reached${suffix}`,
-      retryAfterMs === undefined ? undefined : { retryAfterMs },
-    );
+    return new ProviderError('rate_limited', `${providerName} rate limit reached${suffix}`, {
+      retryAfterMs: parseRetryAfter(headers.get('retry-after')),
+      billed: false,
+    });
   }
   if (status >= 500) {
     return new ProviderError('unavailable', `${providerName} server error (HTTP ${status})`);
@@ -87,6 +129,7 @@ export function statusError(
   return new ProviderError(
     'bad_request',
     `${providerName} rejected request (HTTP ${status})${suffix}`,
+    { billed: false },
   );
 }
 
@@ -95,19 +138,17 @@ export function normalizeBaseUrl(raw: string, providerName: string): string {
   try {
     url = new URL(raw);
   } catch {
-    throw new ProviderError('bad_request', `Invalid ${providerName} base URL`);
+    throw new ProviderError('bad_request', `Invalid ${providerName} base URL`, { billed: false });
   }
+  const reject = (message: string) => new ProviderError('bad_request', message, { billed: false });
   if (url.protocol !== 'http:' && url.protocol !== 'https:') {
-    throw new ProviderError('bad_request', `${providerName} base URL must use http or https`);
+    throw reject(`${providerName} base URL must use http or https`);
   }
   if (url.username !== '' || url.password !== '') {
-    throw new ProviderError('bad_request', `${providerName} base URL must not embed credentials`);
+    throw reject(`${providerName} base URL must not embed credentials`);
   }
   if (url.search !== '' || url.hash !== '') {
-    throw new ProviderError(
-      'bad_request',
-      `${providerName} base URL must not have a query or hash`,
-    );
+    throw reject(`${providerName} base URL must not have a query or hash`);
   }
   return url.href.replace(/\/+$/, '');
 }

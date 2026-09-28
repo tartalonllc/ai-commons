@@ -16,6 +16,9 @@ package.
   Truncated (`length`) or refused outputs are `invalid_output`.
 - **Errors.** Adapters throw only `ProviderError`, and never attach a `cause`
   that could carry request details.
+- **HTTP helper.** `requestJson`, `statusError`, `parseRetryAfter`,
+  `normalizeBaseUrl`, and `safeDetail` live in `@ai-commons/provider-core`
+  (`src/http.ts`) and are shared by all HTTP adapters.
 
 | Condition                     | Code              | Retryable |
 | ----------------------------- | ----------------- | --------- |
@@ -28,6 +31,23 @@ package.
 | HTTP 5xx                      | `unavailable`     | yes       |
 | Other HTTP 4xx                | `bad_request`     | no        |
 | Unparseable / truncated JSON  | `invalid_output`  | yes       |
+
+### Billing verdicts
+
+`ProviderError.billed` tells the worker whether a failed call may have cost
+money. The worker releases a budget reservation only on `false`; `true` and
+unknown (`undefined`) are charged at the reserved worst case, so spend is never
+under-counted.
+
+| Condition                                                         | `billed`    |
+| ----------------------------------------------------------------- | ----------- |
+| Refused before sending (unpriced model, bad config, pre-aborted)  | `false`     |
+| Connection refused / DNS failure (`ECONNREFUSED`, `ENOTFOUND`…)   | `false`     |
+| HTTP 4xx (401, 403, 404, 429, other)                              | `false`     |
+| HTTP 5xx                                                          | `undefined` |
+| Timeout, mid-flight cancellation, other network failure           | `undefined` |
+| OpenAI HTTP 200 with unusable output (bad JSON, refusal, cut off) | `true`      |
+| Any Ollama (local) failure                                        | `false`     |
 
 ## Ollama (`@ai-commons/provider-ollama`)
 

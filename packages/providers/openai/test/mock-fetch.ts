@@ -6,7 +6,10 @@ export interface RecordedCall {
 }
 
 export type Reply =
-  { status: number; body?: unknown; headers?: Record<string, string> } | 'network-error' | 'hang';
+  | { status: number; body?: unknown; headers?: Record<string, string> }
+  | 'network-error'
+  | 'connection-refused'
+  | 'hang';
 
 /** Scripted fetch: returns replies in order and records each request. */
 export function mockFetch(...replies: Reply[]) {
@@ -25,6 +28,11 @@ export function mockFetch(...replies: Reply[]) {
     const reply = replies.shift();
     if (reply === undefined) throw new Error('unexpected fetch call');
     if (reply === 'network-error') throw new TypeError('fetch failed');
+    if (reply === 'connection-refused') {
+      throw new TypeError('fetch failed', {
+        cause: Object.assign(new Error('connect ECONNREFUSED'), { code: 'ECONNREFUSED' }),
+      });
+    }
     if (reply === 'hang') {
       return new Promise<Response>((_resolve, reject) => {
         const signal = init?.signal;

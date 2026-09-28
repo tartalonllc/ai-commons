@@ -156,6 +156,56 @@ describe('OpenAIProvider.execute', () => {
   });
 });
 
+describe('OpenAIProvider billing verdicts', () => {
+  const failure = async (replies: Reply[], req: Partial<InferenceRequest> = {}) =>
+    provider(replies)
+      .openai.execute(request(req))
+      .catch((e: unknown) => e as { code: string; billed: boolean | undefined });
+
+  it('marks refusals that happen before generation as unbilled', async () => {
+    expect(await failure([], { model: 'gpt-unpriced' })).toMatchObject({ billed: false });
+    expect(await failure([], { signal: AbortSignal.abort() })).toMatchObject({
+      code: 'cancelled',
+      billed: false,
+    });
+    expect(await failure(['connection-refused'])).toMatchObject({
+      code: 'unavailable',
+      billed: false,
+    });
+    for (const status of [400, 401, 403, 404, 422, 429]) {
+      expect(await failure([{ status }]), String(status)).toMatchObject({ billed: false });
+    }
+  });
+
+  it('marks unusable 200 responses as billed', async () => {
+    const replies: Reply[] = [
+      completion({ content: 'not json' }),
+      completion({ content: '[1,2]' }),
+      completion({ content: null, refusal: 'no' }),
+      { status: 200, body: { choices: [{ finish_reason: 'length', message: { content: '{' } }] } },
+      { status: 200, body: 'garbage' },
+    ];
+    for (const reply of replies) {
+      expect(await failure([reply])).toMatchObject({ code: 'invalid_output', billed: true });
+    }
+  });
+
+  it('leaves billing unknown when the request may have been processed', async () => {
+    expect(await failure([{ status: 500 }])).toMatchObject({ billed: undefined });
+    expect(await failure(['network-error'])).toMatchObject({ billed: undefined });
+    expect(await failure(['hang'], { timeout_ms: 20 })).toMatchObject({
+      code: 'timeout',
+      billed: undefined,
+    });
+  });
+
+  it('marks constructor refusals as unbilled', () => {
+    expect(() => new OpenAIProvider({ apiKey: '', pricing })).toThrow(
+      expect.objectContaining({ billed: false }),
+    );
+  });
+});
+
 describe('OpenAIProvider.estimateCost', () => {
   it('prices a conservative input bound plus max output tokens', async () => {
     const { openai } = provider([], { inputSafetyFactor: 2 });

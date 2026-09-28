@@ -8,8 +8,6 @@ import {
   type InferenceResult,
   type ModelInfo,
   type ProviderHealth,
-} from '@ai-commons/provider-core';
-import {
   isRecord,
   normalizeBaseUrl,
   optionalCount,
@@ -17,7 +15,7 @@ import {
   safeDetail,
   statusError,
   type FetchFn,
-} from './http.js';
+} from '@ai-commons/provider-core';
 
 export const DEFAULT_OPENAI_URL = 'https://api.openai.com/v1';
 
@@ -47,6 +45,9 @@ export interface OpenAIProviderOptions {
   fetch?: FetchFn;
 }
 
+/** Configuration refusals happen before any request is sent. */
+const UNBILLED = { billed: false } as const;
+
 const LOOPBACK = new Set(['localhost', '127.0.0.1', '[::1]']);
 
 function tokensCost(inputTokens: number, outputTokens: number, price: ModelPricing): number {
@@ -66,12 +67,16 @@ export class OpenAIProvider implements AIProvider {
 
   constructor(options: OpenAIProviderOptions) {
     if (typeof options.apiKey !== 'string' || options.apiKey.trim() === '') {
-      throw new ProviderError('auth', 'OpenAI API key is not configured');
+      throw new ProviderError('auth', 'OpenAI API key is not configured', UNBILLED);
     }
     const baseUrl = normalizeBaseUrl(options.baseUrl ?? DEFAULT_OPENAI_URL, 'OpenAI');
     const parsed = new URL(baseUrl);
     if (parsed.protocol !== 'https:' && !LOOPBACK.has(parsed.hostname)) {
-      throw new ProviderError('bad_request', 'OpenAI base URL must use https for non-local hosts');
+      throw new ProviderError(
+        'bad_request',
+        'OpenAI base URL must use https for non-local hosts',
+        UNBILLED,
+      );
     }
 
     const pricing = new Map<string, ModelPricing>();
@@ -79,13 +84,14 @@ export class OpenAIProvider implements AIProvider {
       const valid = [price.input_per_mtok, price.output_per_mtok].every(
         (n) => typeof n === 'number' && Number.isFinite(n) && n >= 0,
       );
-      if (!valid) throw new ProviderError('bad_request', `Invalid pricing for model "${model}"`);
+      if (!valid)
+        throw new ProviderError('bad_request', `Invalid pricing for model "${model}"`, UNBILLED);
       pricing.set(model, price);
     }
 
     const factor = options.inputSafetyFactor ?? 1.5;
     if (!Number.isFinite(factor) || factor < 1) {
-      throw new ProviderError('bad_request', 'inputSafetyFactor must be >= 1');
+      throw new ProviderError('bad_request', 'inputSafetyFactor must be >= 1', UNBILLED);
     }
 
     this.id = options.id ?? 'openai';
@@ -154,7 +160,20 @@ export class OpenAIProvider implements AIProvider {
     );
     if (res.status !== 200) throw this.error(res.status, res.headers, res.body);
 
-    const body = res.body;
+    try {
+      return await this.completionResult(request, price, res.body, started);
+    } catch (error) {
+      // A 200 means tokens were generated and charged, even if the output is unusable.
+      throw error instanceof ProviderError ? error.withBilled(true) : error;
+    }
+  }
+
+  private async completionResult(
+    request: InferenceRequest,
+    price: ModelPricing,
+    body: unknown,
+    started: number,
+  ): Promise<InferenceResult> {
     const choice = isRecord(body) && Array.isArray(body.choices) ? body.choices[0] : undefined;
     const message = isRecord(choice) ? choice.message : undefined;
     if (!isRecord(body) || !isRecord(choice) || !isRecord(message)) {
@@ -205,7 +224,11 @@ export class OpenAIProvider implements AIProvider {
   private priceFor(model: string): ModelPricing {
     const price = this.#pricing.get(model);
     if (!price) {
-      throw new ProviderError('bad_request', `No pricing configured for model "${model}"`);
+      throw new ProviderError(
+        'bad_request',
+        `No pricing configured for model "${model}"`,
+        UNBILLED,
+      );
     }
     return price;
   }
