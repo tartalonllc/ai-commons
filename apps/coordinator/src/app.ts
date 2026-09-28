@@ -8,6 +8,8 @@ import {
   HeartbeatResponse,
   LeaseRequest,
   LeaseResponse,
+  Metrics,
+  NetworkSummary,
   Project,
   ProjectDefinition,
   ProjectId,
@@ -18,8 +20,8 @@ import {
   ResultSubmission,
   ResultSubmissionResponse,
   TaskFailRequest,
+  TaskFailResponse,
   TaskId,
-  TaskStatus,
   UpdateCapabilitiesRequest,
   WorkerId,
   WorkerStats,
@@ -32,12 +34,7 @@ import { bearerToken, requireAdmin } from './auth.js';
 import type { CoordinatorConfig } from './config.js';
 import type { Database } from './db/client.js';
 import { apiError, HttpError } from './errors.js';
-import {
-  collectMetrics,
-  Metrics,
-  NetworkSummary,
-  networkSummary,
-} from './services/observability.js';
+import { collectMetrics, networkSummary } from './services/observability.js';
 import {
   createProject,
   getProjectRow,
@@ -68,7 +65,6 @@ const BODY_LIMIT = 1_150_000;
 const TaskParams = Type.Object({ id: TaskId }, { additionalProperties: false });
 const ProjectParams = Type.Object({ id: ProjectId }, { additionalProperties: false });
 const WorkerParams = Type.Object({ id: WorkerId }, { additionalProperties: false });
-const FailResponse = Type.Object({ task_status: TaskStatus }, { additionalProperties: false });
 const Health = Type.Object({ status: Type.Literal('ok') }, { additionalProperties: false });
 
 const PG_RETRYABLE = new Set(['40P01', '40001']);
@@ -272,7 +268,11 @@ export async function buildApp({
       api.post(
         '/tasks/:id/fail',
         {
-          schema: { params: TaskParams, body: TaskFailRequest, response: { 200: FailResponse } },
+          schema: {
+            params: TaskParams,
+            body: TaskFailRequest,
+            response: { 200: TaskFailResponse },
+          },
           preHandler: authWorker,
         },
         async (request) => {

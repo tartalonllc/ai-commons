@@ -1,78 +1,15 @@
 import { sql } from 'drizzle-orm';
-import Type, { type Static } from 'typebox';
+import { parse, WorkerStatus, type Metrics, type NetworkSummary } from '@ai-commons/protocol';
 import type { Database } from '../db/client.js';
 import { ACU_USD } from './workers.js';
 
-const Count = Type.Integer({ minimum: 0 });
-
-export const Metrics = Type.Object(
-  {
-    worker_count: Count,
-    active_worker_count: Count,
-    task_queue_depth: Count,
-    task_completion_rate: Type.Number({ minimum: 0, maximum: 1 }),
-    task_failure_rate: Type.Number({ minimum: 0, maximum: 1 }),
-    average_task_duration_ms: Type.Number({ minimum: 0 }),
-  },
-  { additionalProperties: false },
-);
-export type Metrics = Static<typeof Metrics>;
-
-/** Public dashboard summary (§37). Contains no IPs, providers, or machine details (§52). */
-export const NetworkSummary = Type.Object(
-  {
-    network: Type.Object(
-      {
-        connected_workers: Count,
-        active_workers: Count,
-        tasks_waiting: Count,
-        tasks_processing: Count,
-        tasks_completed: Count,
-        tasks_failed: Count,
-      },
-      { additionalProperties: false },
-    ),
-    compute: Type.Object(
-      {
-        input_tokens: Count,
-        output_tokens: Count,
-        local_inference_hours: Type.Number({ minimum: 0 }),
-        api_cost_usd: Type.Number({ minimum: 0 }),
-        ai_compute_units: Type.Number({ minimum: 0 }),
-      },
-      { additionalProperties: false },
-    ),
-    projects: Type.Array(
-      Type.Object(
-        {
-          id: Type.String(),
-          name: Type.String(),
-          tasks_total: Count,
-          tasks_completed: Count,
-          progress: Type.Number({ minimum: 0, maximum: 1 }),
-          workers: Count,
-        },
-        { additionalProperties: false },
-      ),
-    ),
-    workers: Type.Array(
-      Type.Object(
-        {
-          worker_id: Type.String(),
-          status: Type.String(),
-          tasks_completed: Count,
-          last_seen: Type.String({ format: 'date-time' }),
-        },
-        { additionalProperties: false },
-      ),
-    ),
-    generated_at: Type.String({ format: 'date-time' }),
-  },
-  { additionalProperties: false },
-);
-export type NetworkSummary = Static<typeof NetworkSummary>;
-
 const n = (v: unknown): number => Number(v ?? 0);
+/** Worker status is only ever written from validated heartbeats. */
+const workerStatus = (v: unknown): WorkerStatus => {
+  const result = parse(WorkerStatus, v);
+  if (!result.ok) throw new Error('Unexpected worker status in database');
+  return result.value;
+};
 const iso = (v: unknown): string => (v instanceof Date ? v : new Date(String(v))).toISOString();
 
 /** A worker is connected if it has been seen within three heartbeat intervals. */
@@ -170,7 +107,7 @@ export async function networkSummary(db: Database, heartbeatMs: number): Promise
     }),
     workers: workerRows.map((w) => ({
       worker_id: String(w['id']),
-      status: String(w['status']),
+      status: workerStatus(w['status']),
       tasks_completed: n(w['tasks_completed']),
       last_seen: iso(w['last_seen_at']),
     })),

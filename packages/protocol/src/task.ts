@@ -190,3 +190,9 @@ export const ProjectStats = Type.Object(
   { additionalProperties: false },
 );
 export type ProjectStats = Static<typeof ProjectStats>;
+
+export const TaskFailResponse = Type.Object(
+  { task_status: TaskStatus },
+  { additionalProperties: false },
+);
+export type TaskFailResponse = Static<typeof TaskFailResponse>;
