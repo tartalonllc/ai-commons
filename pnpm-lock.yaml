@@ -39,6 +39,21 @@ importers:
         specifier: ^1.3.34
         version: 1.3.34
 
+  packages/providers/core:
+    dependencies:
+      '@ai-commons/protocol':
+        specifier: workspace:*
+        version: link:../../protocol
+
+  packages/validators:
+    dependencies:
+      '@ai-commons/protocol':
+        specifier: workspace:*
+        version: link:../protocol
+      typebox:
+        specifier: ^1.3.34
+        version: 1.3.34
+
 packages:
 
   '@cacheable/memory@2.2.0':
