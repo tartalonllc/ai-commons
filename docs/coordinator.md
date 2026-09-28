@@ -27,6 +27,13 @@ Migrations run automatically at startup (or `pnpm db:migrate`). After editing
 | `RATE_LIMIT_REGISTER_PER_HOUR` | 20             | registrations/hour per IP              |
 | `RATE_LIMIT_DISABLED`          | —              | `true` disables (tests only)           |
 | `LOG_LEVEL`                    | info           |                                        |
+| `DASHBOARD_DIR`                | —              | serve a built dashboard at `/`         |
+
+When `DASHBOARD_DIR` is set (e.g. `apps/dashboard/dist`), the coordinator serves
+it with `@fastify/static`: no directory listing, dotfiles denied, hashed
+`assets/*` cached immutably, `index.html` revalidated and sent with a strict
+Content-Security-Policy. API routes are unaffected. Startup fails if the
+directory has no `index.html`.
 
 Tests need the compose database running: `pnpm --filter @ai-commons/coordinator test`
 (override with `TEST_DATABASE_URL`). The test setup drops and recreates the

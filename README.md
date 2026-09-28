@@ -21,7 +21,7 @@ You control exactly how much compute or API budget may be contributed.
 | `packages/protocol`    | Shared wire schemas and types (TypeBox/JSON Schema)   |
 | `apps/coordinator`     | Fastify + PostgreSQL task coordinator _(planned)_     |
 | `apps/worker`          | CLI volunteer worker _(planned)_                      |
-| `apps/dashboard`       | Web dashboard _(planned)_                             |
+| `apps/dashboard`       | Live web dashboard (see docs/dashboard.md)            |
 | `packages/providers/*` | Provider adapters: Ollama, one commercial _(planned)_ |
 | `examples/*`           | Example workloads _(planned)_                         |
 

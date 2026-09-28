@@ -65,8 +65,15 @@ export async function networkSummary(db: Database, heartbeatMs: number): Promise
         (SELECT count(*) FROM tasks t WHERE t.project_id = p.id) AS total,
         (SELECT count(*) FROM tasks t WHERE t.project_id = p.id AND t.status = 'COMPLETED') AS completed,
         (SELECT count(DISTINCT r.worker_id) FROM results r JOIN tasks t ON t.id = r.task_id
-           WHERE t.project_id = p.id) AS workers
-      FROM projects p WHERE p.status <> 'archived' ORDER BY p.created_at`)
+           WHERE t.project_id = p.id) AS workers,
+        r.tokens, r.local_ms, r.api_cost
+      FROM projects p
+      LEFT JOIN LATERAL (
+        SELECT coalesce(sum(coalesce(r.input_tokens, 0) + coalesce(r.output_tokens, 0)), 0) AS tokens,
+               coalesce(sum(r.duration_ms) FILTER (WHERE r.cost_usd IS NULL), 0) AS local_ms,
+               coalesce(sum(r.cost_usd), 0) AS api_cost
+        FROM results r JOIN tasks t ON t.id = r.task_id WHERE t.project_id = p.id
+      ) r ON true WHERE p.status <> 'archived' ORDER BY p.created_at`)
   ).rows;
 
   const workerRows = (
@@ -103,6 +110,9 @@ export async function networkSummary(db: Database, heartbeatMs: number): Promise
         tasks_completed: completed,
         progress: total === 0 ? 0 : completed / total,
         workers: n(p['workers']),
+        tokens_processed: n(p['tokens']),
+        local_inference_hours: n(p['local_ms']) / 3_600_000,
+        api_cost_usd: n(p['api_cost']),
       };
     }),
     workers: workerRows.map((w) => ({

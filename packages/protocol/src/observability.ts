@@ -23,6 +23,9 @@ export const NetworkProjectSummary = Type.Object(
     tasks_completed: NonNegativeInt,
     progress: Type.Number({ minimum: 0, maximum: 1 }),
     workers: NonNegativeInt,
+    tokens_processed: NonNegativeInt,
+    local_inference_hours: Type.Number({ minimum: 0 }),
+    api_cost_usd: Type.Number({ minimum: 0 }),
   },
   { additionalProperties: false },
 );

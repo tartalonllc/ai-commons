@@ -208,6 +208,9 @@ describe('observability', () => {
       tasks_total: 3,
       tasks_completed: 1,
       workers: 1,
+      tokens_processed: 120,
+      local_inference_hours: 1000 / 3_600_000,
+      api_cost_usd: 0,
     });
     expect(body.workers[0]).toEqual({
       worker_id: a.id,
