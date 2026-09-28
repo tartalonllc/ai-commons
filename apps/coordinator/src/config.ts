@@ -11,6 +11,8 @@ export interface CoordinatorConfig {
   maxTaskFailures: number;
   rateLimit: { max: number; registerMaxPerHour: number } | false;
   logLevel: string;
+  /** Built dashboard (apps/dashboard/dist) to serve at `/`; disabled when undefined. */
+  dashboardDir: string | undefined;
 }
 
 export class ConfigError extends Error {
@@ -54,5 +56,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CoordinatorCon
             registerMaxPerHour: intFromEnv(env, 'RATE_LIMIT_REGISTER_PER_HOUR', 20),
           },
     logLevel: env['LOG_LEVEL'] ?? 'info',
+    dashboardDir: env['DASHBOARD_DIR'] || undefined,
   };
 }

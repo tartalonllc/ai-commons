@@ -32,6 +32,7 @@ import Fastify, { type FastifyError, type FastifyInstance, type FastifyRequest }
 import Type from 'typebox';
 import { bearerToken, requireAdmin } from './auth.js';
 import type { CoordinatorConfig } from './config.js';
+import { registerDashboard } from './dashboard.js';
 import type { Database } from './db/client.js';
 import { apiError, HttpError } from './errors.js';
 import { collectMetrics, networkSummary } from './services/observability.js';
@@ -342,6 +343,8 @@ export async function buildApp({
     },
     { prefix: API_PREFIX },
   );
+
+  if (config.dashboardDir !== undefined) await registerDashboard(app, config.dashboardDir);
 
   return app;
 }

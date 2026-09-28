@@ -1,0 +1,602 @@
+:root {
+  --bg: #f7f8f7;
+  --surface: #ffffff;
+  --surface-2: #f1f3f2;
+  --text: #17201d;
+  --muted: #5b6763;
+  --border: #dde3e0;
+  --accent: #0f766e;
+  --accent-strong: #0b5c56;
+  --accent-weak: #d5efeb;
+  --track: #e4e9e7;
+  --ok: #15803d;
+  --ok-weak: #dcf3e3;
+  --warn: #a16207;
+  --warn-weak: #fbf0d4;
+  --danger: #b42318;
+  --danger-weak: #fde8e6;
+  --neutral-weak: #eceff0;
+  --focus: #2563eb;
+  --radius: 10px;
+  --shadow: 0 1px 2px rgb(16 24 20 / 6%);
+  --mono: ui-monospace, 'Cascadia Code', 'SF Mono', Menlo, Consolas, monospace;
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0e1412;
+    --surface: #151d1a;
+    --surface-2: #1b2521;
+    --text: #e6ece9;
+    --muted: #9aa8a3;
+    --border: #2a3531;
+    --accent: #2dd4bf;
+    --accent-strong: #5eead4;
+    --accent-weak: #133a35;
+    --track: #25312d;
+    --ok: #4ade80;
+    --ok-weak: #143322;
+    --warn: #fbbf24;
+    --warn-weak: #3a2e10;
+    --danger: #f87171;
+    --danger-weak: #3d1a18;
+    --neutral-weak: #242d2a;
+    --focus: #93c5fd;
+    --shadow: none;
+    color-scheme: dark;
+  }
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font:
+    15px/1.5 system-ui,
+    -apple-system,
+    'Segoe UI',
+    Roboto,
+    sans-serif;
+  font-variant-numeric: tabular-nums;
+}
+
+a {
+  color: var(--accent-strong);
+}
+
+:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+.container {
+  width: 100%;
+  max-width: 1120px;
+  margin: 0 auto;
+  padding: 0 16px;
+}
+
+main.container {
+  padding-bottom: 32px;
+}
+
+main:focus {
+  outline: none;
+}
+
+.skip {
+  position: absolute;
+  left: 8px;
+  top: -48px;
+  padding: 8px 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  z-index: 10;
+}
+
+.skip:focus {
+  top: 8px;
+}
+
+/* ---- Top bar ------------------------------------------------------------ */
+
+.topbar {
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+
+.topbar-inner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 56px;
+}
+
+.brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  font-weight: 650;
+  font-size: 17px;
+  color: var(--text);
+  text-decoration: none;
+}
+
+.brand-mark {
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  background: var(--accent);
+  box-shadow: inset 0 0 0 6px var(--accent-weak);
+}
+
+.status {
+  margin: 0;
+  font-size: 13px;
+  color: var(--muted);
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
+}
+
+.status::before {
+  content: '';
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+
+.status-live::before {
+  background: var(--ok);
+}
+
+.status-offline::before {
+  background: var(--danger);
+}
+
+/* ---- Banner ------------------------------------------------------------- */
+
+.banner {
+  margin-top: 16px;
+  padding: 12px 14px;
+  border-radius: var(--radius);
+  background: var(--danger-weak);
+  color: var(--text);
+  border: 1px solid color-mix(in srgb, var(--danger) 35%, transparent);
+}
+
+.banner strong {
+  color: var(--danger);
+}
+
+/* ---- Layout ------------------------------------------------------------- */
+
+.page-header {
+  margin: 28px 0 20px;
+}
+
+h1 {
+  margin: 0;
+  font-size: 28px;
+  line-height: 1.2;
+  letter-spacing: -0.01em;
+  overflow-wrap: anywhere;
+}
+
+h2 {
+  margin: 0 0 12px;
+  font-size: 17px;
+}
+
+.lede,
+.note,
+.empty {
+  color: var(--muted);
+}
+
+.lede {
+  margin: 6px 0 0;
+}
+
+.note {
+  font-size: 13px;
+  margin: 10px 0 0;
+}
+
+.empty {
+  margin: 0;
+  padding: 20px;
+  background: var(--surface);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius);
+  text-align: center;
+}
+
+.section {
+  margin-top: 32px;
+}
+
+.eyebrow {
+  margin: 0 0 8px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.back {
+  display: inline-block;
+  margin-top: 20px;
+  font-size: 14px;
+  text-decoration: none;
+}
+
+.back:hover {
+  text-decoration: underline;
+}
+
+.footer {
+  padding-top: 24px;
+  padding-bottom: 32px;
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.message {
+  padding: 48px 0;
+}
+
+.message p {
+  color: var(--muted);
+}
+
+/* ---- Stats -------------------------------------------------------------- */
+
+.stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(135px, 1fr));
+  gap: 12px;
+  margin: 0;
+}
+
+.stats-3 {
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+}
+
+.stat {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+  box-shadow: var(--shadow);
+  min-width: 0;
+}
+
+.stat dt {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.stat dd {
+  margin: 4px 0 0;
+}
+
+.stat-value {
+  display: block;
+  font-size: 24px;
+  font-weight: 650;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+
+.stat small {
+  display: block;
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+/* ---- Progress ----------------------------------------------------------- */
+
+.progress {
+  position: relative;
+  overflow: hidden;
+  background: var(--track);
+  border-radius: 999px;
+}
+
+.progress-sm {
+  height: 8px;
+  flex: 1;
+  min-width: 60px;
+}
+
+.progress-lg {
+  height: 16px;
+  margin: 12px 0 20px;
+}
+
+.progress-fill {
+  height: 100%;
+  background: var(--accent);
+  border-radius: inherit;
+  transition: width 0.6s ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .progress-fill {
+    transition: none;
+  }
+}
+
+.progress-cell {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.progress-text {
+  min-width: 48px;
+  text-align: right;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+/* ---- Tables ------------------------------------------------------------- */
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  box-shadow: var(--shadow);
+}
+
+.table th,
+.table td {
+  padding: 10px 14px;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+  vertical-align: middle;
+}
+
+.table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.table th {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  background: var(--surface-2);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.table .num {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.table .col-progress {
+  width: 38%;
+}
+
+.table a {
+  font-weight: 600;
+  text-decoration: none;
+  overflow-wrap: anywhere;
+}
+
+.table a:hover {
+  text-decoration: underline;
+}
+
+code {
+  font-family: var(--mono);
+  font-size: 13px;
+}
+
+@media (max-width: 640px) {
+  .table,
+  .table tbody,
+  .table tr,
+  .table td {
+    display: block;
+    width: 100%;
+  }
+
+  .table thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+  }
+
+  .table tr {
+    padding: 8px 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .table tbody tr:last-child {
+    border-bottom: 0;
+  }
+
+  .table td,
+  .table .num {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 16px;
+    border: 0;
+    padding: 4px 14px;
+    text-align: right;
+  }
+
+  .table td::before {
+    content: attr(data-label);
+    color: var(--muted);
+    font-size: 13px;
+    text-align: left;
+    flex-shrink: 0;
+  }
+
+  .table .progress-cell {
+    flex: 1;
+    max-width: 220px;
+  }
+
+  h1 {
+    font-size: 24px;
+  }
+
+  .hero {
+    padding: 16px;
+  }
+
+  .stat-value {
+    font-size: 21px;
+  }
+}
+
+/* ---- Pills -------------------------------------------------------------- */
+
+.pill {
+  display: inline-block;
+  padding: 2px 9px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  background: var(--neutral-weak);
+  color: var(--muted);
+}
+
+.pill-available {
+  background: var(--ok-weak);
+  color: var(--ok);
+}
+
+.pill-busy {
+  background: var(--accent-weak);
+  color: var(--accent-strong);
+}
+
+.pill-paused {
+  background: var(--warn-weak);
+  color: var(--warn);
+}
+
+.pill-category {
+  background: var(--accent-weak);
+  color: var(--accent-strong);
+}
+
+/* ---- Project page ------------------------------------------------------- */
+
+.goal {
+  margin: 0;
+  font-size: 16px;
+  max-width: 70ch;
+  overflow-wrap: anywhere;
+}
+
+.hero {
+  margin-top: 24px;
+  padding: 20px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+
+.hero .stat {
+  background: var(--surface-2);
+  box-shadow: none;
+}
+
+.hero-top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.hero-percent {
+  font-size: 40px;
+  font-weight: 700;
+  line-height: 1;
+  color: var(--accent-strong);
+}
+
+.hero-count {
+  color: var(--muted);
+}
+
+/* Flex (not grid) so the last row stretches and never leaves empty cells. */
+.facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1px;
+  margin: 16px 0;
+  background: var(--border);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.facts > div {
+  flex: 1 1 220px;
+  background: var(--surface);
+  padding: 12px 14px;
+}
+
+.facts dt {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.facts dd {
+  margin: 2px 0 0;
+  overflow-wrap: anywhere;
+}
+
+.code {
+  margin: 16px 0 0;
+}
+
+.code figcaption {
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+
+.code pre {
+  margin: 0;
+  padding: 14px;
+  max-height: 360px;
+  overflow: auto;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
