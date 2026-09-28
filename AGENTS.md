@@ -2,7 +2,7 @@
 
 Before implementing anything, read `README.md`, this file, and the relevant
 docs in `docs/` (`protocol.md` first). The full specification lives in
-`Open Compute.md`.
+`Open Compute.md`. Current status is in `PROGRESS.md`; resume from `NEXT_STEPS.md`.
 
 ## Engineering requirements
 
