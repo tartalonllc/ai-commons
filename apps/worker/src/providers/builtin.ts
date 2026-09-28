@@ -1,12 +1,10 @@
-import { ProviderRegistry, type ProviderFactory } from './registry.js';
+import { OllamaProvider } from '@ai-commons/provider-ollama';
+import { OpenAIProvider } from '@ai-commons/provider-openai';
+import { secretAccounts } from '../secrets.js';
+import { ProviderRegistry } from './registry.js';
 
-const notWired =
-  (id: string): ProviderFactory =>
-  async () => {
-    throw new Error(`The ${id} adapter is not bundled with this build of the worker yet`);
-  };
+const OLLAMA_DEFAULT_ENDPOINT = 'http://localhost:11434';
 
-/** Adapters are wired here by replacing the `notWired` factories. */
 export function builtinProviders(): ProviderRegistry {
   return new ProviderRegistry()
     .register({
@@ -14,14 +12,23 @@ export function builtinProviders(): ProviderRegistry {
       kind: 'local',
       displayName: 'Ollama (local)',
       requiresKey: false,
-      defaultEndpoint: 'http://localhost:11434',
-      factory: notWired('ollama'),
+      defaultEndpoint: OLLAMA_DEFAULT_ENDPOINT,
+      factory: async (cfg) =>
+        new OllamaProvider({ baseUrl: cfg.endpoint ?? OLLAMA_DEFAULT_ENDPOINT }),
     })
     .register({
       id: 'openai',
       kind: 'remote',
       displayName: 'OpenAI API',
       requiresKey: true,
-      factory: notWired('openai'),
+      factory: async (cfg, secrets) => {
+        const apiKey = await secrets.get(secretAccounts.provider(cfg.id));
+        if (!apiKey) throw new Error(`No API key stored; run "aicommons set-key ${cfg.id}"`);
+        return new OpenAIProvider({
+          apiKey,
+          pricing: cfg.pricing ?? {},
+          ...(cfg.endpoint === undefined ? {} : { baseUrl: cfg.endpoint }),
+        });
+      },
     });
 }

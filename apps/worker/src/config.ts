@@ -26,7 +26,7 @@ export const ProviderConfig = Type.Object(
     enabled: Type.Boolean(),
     models: Type.Array(ModelCapability, { maxItems: 64 }),
     endpoint: Type.Optional(Type.String({ minLength: 1, maxLength: 2048 })),
-    /** USD per 1M tokens, overriding adapter defaults. */
+    /** USD per 1M tokens. Remote models without a price are refused (budget safety). */
     pricing: Type.Optional(
       Type.Record(
         Type.String(),

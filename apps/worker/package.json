@@ -24,6 +24,8 @@
   "dependencies": {
     "@ai-commons/protocol": "workspace:*",
     "@ai-commons/provider-core": "workspace:*",
+    "@ai-commons/provider-ollama": "workspace:*",
+    "@ai-commons/provider-openai": "workspace:*",
     "@ai-commons/validators": "workspace:*",
     "@napi-rs/keyring": "^2.1.0",
     "pino": "^10.3.1",

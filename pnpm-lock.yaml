@@ -75,6 +75,12 @@ importers:
       '@ai-commons/provider-core':
         specifier: workspace:*
         version: link:../../packages/providers/core
+      '@ai-commons/provider-ollama':
+        specifier: workspace:*
+        version: link:../../packages/providers/ollama
+      '@ai-commons/provider-openai':
+        specifier: workspace:*
+        version: link:../../packages/providers/openai
       '@ai-commons/validators':
         specifier: workspace:*
         version: link:../../packages/validators
