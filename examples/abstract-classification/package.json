@@ -1,0 +1,21 @@
+{
+  "name": "@ai-commons/example-abstract-classification",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Demo AI Commons workload: classify public scientific abstracts.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "fetch-arxiv": "node scripts/fetch-arxiv.ts",
+    "publish-project": "node scripts/publish.ts"
+  },
+  "dependencies": {
+    "@ai-commons/project-sdk": "workspace:*",
+    "@ai-commons/protocol": "workspace:*"
+  },
+  "devDependencies": {
+    "typebox": "^1.3.34"
+  }
+}
