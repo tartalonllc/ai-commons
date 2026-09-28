@@ -1,4 +1,4 @@
-import { ProviderError } from '@ai-commons/provider-core';
+import { ProviderError } from './errors.js';
 
 export type FetchFn = typeof globalThis.fetch;
 
@@ -59,7 +59,9 @@ export function parseRetryAfter(value: string | null, now = Date.now()): number 
   return Math.max(0, date - now);
 }
 
-/** Maps a non-2xx HTTP status to a ProviderError. `detail` must be safe to surface. */
+/**
+ * Maps a non-2xx HTTP status to a ProviderError. `detail` must be safe to surface.
+ */
 export function statusError(
   providerName: string,
   status: number,
@@ -74,12 +76,9 @@ export function statusError(
     return new ProviderError('model_not_found', `${providerName} model not found${suffix}`);
   }
   if (status === 429) {
-    const retryAfterMs = parseRetryAfter(headers.get('retry-after'));
-    return new ProviderError(
-      'rate_limited',
-      `${providerName} rate limit reached${suffix}`,
-      retryAfterMs === undefined ? undefined : { retryAfterMs },
-    );
+    return new ProviderError('rate_limited', `${providerName} rate limit reached${suffix}`, {
+      retryAfterMs: parseRetryAfter(headers.get('retry-after')),
+    });
   }
   if (status >= 500) {
     return new ProviderError('unavailable', `${providerName} server error (HTTP ${status})`);
@@ -97,17 +96,15 @@ export function normalizeBaseUrl(raw: string, providerName: string): string {
   } catch {
     throw new ProviderError('bad_request', `Invalid ${providerName} base URL`);
   }
+  const reject = (message: string) => new ProviderError('bad_request', message);
   if (url.protocol !== 'http:' && url.protocol !== 'https:') {
-    throw new ProviderError('bad_request', `${providerName} base URL must use http or https`);
+    throw reject(`${providerName} base URL must use http or https`);
   }
   if (url.username !== '' || url.password !== '') {
-    throw new ProviderError('bad_request', `${providerName} base URL must not embed credentials`);
+    throw reject(`${providerName} base URL must not embed credentials`);
   }
   if (url.search !== '' || url.hash !== '') {
-    throw new ProviderError(
-      'bad_request',
-      `${providerName} base URL must not have a query or hash`,
-    );
+    throw reject(`${providerName} base URL must not have a query or hash`);
   }
   return url.href.replace(/\/+$/, '');
 }

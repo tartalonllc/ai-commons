@@ -8,8 +8,6 @@ import {
   type InferenceResult,
   type ModelInfo,
   type ProviderHealth,
-} from '@ai-commons/provider-core';
-import {
   isRecord,
   normalizeBaseUrl,
   optionalCount,
@@ -17,7 +15,7 @@ import {
   safeDetail,
   statusError,
   type FetchFn,
-} from './http.js';
+} from '@ai-commons/provider-core';
 
 export const DEFAULT_OLLAMA_URL = 'http://localhost:11434';
 
