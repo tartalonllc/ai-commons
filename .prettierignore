@@ -2,3 +2,4 @@ pnpm-lock.yaml
 dist/
 Open Compute.md
 .claude/
+.playwright-mcp/

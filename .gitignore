@@ -10,3 +10,4 @@ coverage/
 *.sqlite-journal
 *.db
 .claude/worktrees/
+.playwright-mcp/
