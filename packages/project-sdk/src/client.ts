@@ -2,17 +2,17 @@ import {
   API_PREFIX,
   ApiError,
   CreateTasksResponse,
-  jsonByteLength,
   LIMITS,
   parse,
   Project,
   ProjectStats,
+  type JsonSchemaDocument,
   type ProjectDefinition,
   type TaskInput,
   type ValidationIssue,
 } from '@ai-commons/protocol';
 import type { Static, TSchema } from 'typebox';
-import Value from 'typebox/value';
+import { checkAgainstSchema } from '@ai-commons/validators';
 
 export type FetchLike = (input: string, init: RequestInit) => Promise<Response>;
 
@@ -56,14 +56,22 @@ export interface IngestResult {
   skipped: { index: number; issues: ValidationIssue[] }[];
 }
 
-export function checkTaskPayload(inputSchema: TSchema, task: TaskInput): ValidationIssue[] {
-  if (jsonByteLength(task.payload) > LIMITS.maxPayloadBytes) {
+export function checkTaskPayload(
+  inputSchema: JsonSchemaDocument,
+  task: TaskInput,
+): ValidationIssue[] {
+  const check = checkAgainstSchema(inputSchema, task.payload, {
+    maxBytes: LIMITS.maxPayloadBytes,
+    maxIssues: 10,
+  });
+  if (check.ok) return [];
+  if (check.reason === 'too_large') {
     return [{ path: '/payload', message: `payload exceeds ${LIMITS.maxPayloadBytes} bytes` }];
   }
-  if (Value.Check(inputSchema, task.payload)) return [];
-  return Value.Errors(inputSchema, task.payload)
-    .slice(0, 10)
-    .map((e) => ({ path: `/payload${e.instancePath}`, message: e.message }));
+  return check.issues.map((i) => ({
+    path: i.path === '/' ? '/payload' : `/payload${i.path}`,
+    message: i.message,
+  }));
 }
 
 /** Administrative client for project owners. Never sent worker or provider credentials. */
@@ -104,7 +112,7 @@ export class CoordinatorAdminClient {
       options.batchSize ?? LIMITS.maxTasksPerIngestBatch,
       LIMITS.maxTasksPerIngestBatch,
     );
-    const schema = project.input_schema as TSchema;
+    const schema = project.input_schema;
     const path = `/projects/${encodeURIComponent(project.id)}/tasks`;
     const result: IngestResult = { created: 0, task_ids: [], skipped: [] };
     let batch: TaskInput[] = [];

@@ -2,27 +2,54 @@ import { createHash } from 'node:crypto';
 import {
   jsonByteLength,
   LIMITS,
+  templatePlaceholders,
   type JsonObject,
   type JsonSchemaDocument,
+  type ProjectDefinition,
   type ValidationIssue,
 } from '@ai-commons/protocol';
 import Value from 'typebox/value';
 
-export type OutputCheck = { ok: true } | { ok: false; issues: ValidationIssue[] };
+export type SchemaCheck =
+  { ok: true } | { ok: false; reason: 'too_large' | 'schema'; issues: ValidationIssue[] };
+
+export interface SchemaCheckOptions {
+  maxBytes: number;
+  maxIssues?: number;
+}
 
 /**
- * Validates a model result against a project's output JSON Schema. Schemas are
- * interpreted (never compiled to code), so untrusted project schemas are safe.
+ * Validates untrusted JSON against a project-supplied JSON Schema, enforcing a
+ * serialized size limit first. Schemas are interpreted (never compiled to
+ * code), so untrusted project schemas are safe.
  */
-export function checkOutput(schema: JsonSchemaDocument, result: unknown): OutputCheck {
-  if (jsonByteLength(result) > LIMITS.maxResultBytes) {
-    return { ok: false, issues: [{ path: '/', message: 'result exceeds maximum size' }] };
+export function checkAgainstSchema(
+  schema: JsonSchemaDocument,
+  value: unknown,
+  { maxBytes, maxIssues = 20 }: SchemaCheckOptions,
+): SchemaCheck {
+  if (jsonByteLength(value) > maxBytes) {
+    return {
+      ok: false,
+      reason: 'too_large',
+      issues: [{ path: '/', message: `exceeds maximum size of ${maxBytes} bytes` }],
+    };
   }
-  if (Value.Check(schema, result)) return { ok: true };
-  const issues = Value.Errors(schema, result)
-    .slice(0, 20)
+  if (Value.Check(schema, value)) return { ok: true };
+  const issues = Value.Errors(schema, value)
+    .slice(0, maxIssues)
     .map((e) => ({ path: e.instancePath || '/', message: e.message }));
-  return { ok: false, issues };
+  return { ok: false, reason: 'schema', issues };
+}
+
+/** Model result vs. project output_schema, limited to LIMITS.maxResultBytes. */
+export function checkOutput(schema: JsonSchemaDocument, result: unknown): SchemaCheck {
+  return checkAgainstSchema(schema, result, { maxBytes: LIMITS.maxResultBytes });
+}
+
+/** Task payload vs. project input_schema, limited to LIMITS.maxPayloadBytes. */
+export function checkInput(schema: JsonSchemaDocument, payload: unknown): SchemaCheck {
+  return checkAgainstSchema(schema, payload, { maxBytes: LIMITS.maxPayloadBytes });
 }
 
 const SUPPORTED_KEYWORDS = new Set([
@@ -89,6 +116,76 @@ export function checkProjectSchema(schema: JsonSchemaDocument, maxDepth = 12): V
     }
   };
   visit(schema, '', 0);
+  return issues;
+}
+
+function propertyNames(schema: JsonSchemaDocument): Set<string> | undefined {
+  const props = schema['properties'];
+  if (typeof props !== 'object' || props === null || Array.isArray(props)) return undefined;
+  return new Set(Object.keys(props));
+}
+
+/**
+ * Cross-field consistency of a (structurally valid) project definition: safe
+ * schemas, every prompt placeholder names an input property, and consensus
+ * settings reference real output properties. Shared by SDK and coordinator so
+ * the server never trusts clients to have checked.
+ */
+export function checkProjectDefinition(def: ProjectDefinition): ValidationIssue[] {
+  const issues: ValidationIssue[] = [
+    ...checkProjectSchema(def.input_schema).map((i) => ({
+      path: `/input_schema${i.path}`,
+      message: i.message,
+    })),
+    ...checkProjectSchema(def.output_schema).map((i) => ({
+      path: `/output_schema${i.path}`,
+      message: i.message,
+    })),
+  ];
+
+  const inputProps = propertyNames(def.input_schema);
+  if (!inputProps) {
+    issues.push({
+      path: '/input_schema/properties',
+      message: 'input schema must declare properties',
+    });
+  } else {
+    for (const part of ['system', 'user'] as const) {
+      for (const field of templatePlaceholders(def.prompt[part])) {
+        if (!inputProps.has(field)) {
+          issues.push({
+            path: `/prompt/${part}`,
+            message: `placeholder "{{${field}}}" is not an input_schema property`,
+          });
+        }
+      }
+    }
+  }
+
+  const outputProps = propertyNames(def.output_schema);
+  const { mode, consensus_fields: fields, replication_factor } = def.validation;
+  if (mode === 'consensus') {
+    if (!fields || fields.length === 0) {
+      issues.push({
+        path: '/validation/consensus_fields',
+        message: 'consensus mode requires at least one consensus field',
+      });
+    }
+    if (replication_factor < 2) {
+      issues.push({
+        path: '/validation/replication_factor',
+        message: 'consensus mode requires replication_factor >= 2',
+      });
+    }
+  }
+  for (const field of fields ?? []) {
+    if (!outputProps?.has(field)) {
+      issues.push({
+        path: '/validation/consensus_fields',
+        message: `"${field}" is not an output_schema property`,
+      });
+    }
+  }
   return issues;
 }
 

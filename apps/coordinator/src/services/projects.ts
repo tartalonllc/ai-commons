@@ -1,7 +1,5 @@
 import {
-  jsonByteLength,
   LIMITS,
-  templatePlaceholders,
   type CreateTasksRequest,
   type CreateTasksResponse,
   type Project,
@@ -10,9 +8,8 @@ import {
   type ProjectStats,
   type ProjectStatus,
 } from '@ai-commons/protocol';
-import { checkProjectSchema } from '@ai-commons/validators';
+import { checkInput, checkProjectDefinition } from '@ai-commons/validators';
 import { eq, ne, sql } from 'drizzle-orm';
-import Value from 'typebox/value';
 import type { Database, Executor } from '../db/client.js';
 import { projects, tasks } from '../db/schema.js';
 import { HttpError } from '../errors.js';
@@ -38,40 +35,8 @@ export function toProject(row: ProjectRow): Project {
   };
 }
 
-function schemaProperties(schema: Record<string, unknown>): Set<string> {
-  const props = schema['properties'];
-  return new Set(typeof props === 'object' && props !== null ? Object.keys(props) : []);
-}
-
 function validateDefinition(def: ProjectDefinition): void {
-  const issues = [
-    ...checkProjectSchema(def.input_schema).map((i) => `input_schema${i.path}: ${i.message}`),
-    ...checkProjectSchema(def.output_schema).map((i) => `output_schema${i.path}: ${i.message}`),
-  ];
-
-  const inputFields = schemaProperties(def.input_schema);
-  for (const field of [
-    ...templatePlaceholders(def.prompt.system),
-    ...templatePlaceholders(def.prompt.user),
-  ]) {
-    if (!inputFields.has(field))
-      issues.push(`prompt placeholder {{${field}}} is not an input_schema property`);
-  }
-
-  const outputFields = schemaProperties(def.output_schema);
-  for (const field of def.validation.consensus_fields ?? []) {
-    if (!outputFields.has(field))
-      issues.push(`consensus field "${field}" is not an output_schema property`);
-  }
-  if (def.validation.mode === 'consensus') {
-    if (def.validation.replication_factor < 2) {
-      issues.push('consensus validation requires replication_factor >= 2');
-    }
-    if ((def.validation.consensus_fields ?? []).length === 0) {
-      issues.push('consensus validation requires non-empty consensus_fields');
-    }
-  }
-
+  const issues = checkProjectDefinition(def).map((i) => `${i.path}: ${i.message}`);
   if (issues.length > 0) throw new HttpError('bad_request', issues.slice(0, 10).join('; '));
 }
 
@@ -126,15 +91,16 @@ export async function ingestTasks(
   if (project.status === 'archived') throw new HttpError('conflict', 'Project is archived');
 
   const rows = request.tasks.map((task, index) => {
-    if (jsonByteLength(task.payload) > LIMITS.maxPayloadBytes) {
+    const check = checkInput(project.inputSchema, task.payload);
+    if (!check.ok && check.reason === 'too_large') {
       throw new HttpError(
         'payload_too_large',
         `tasks[${index}].payload exceeds ${LIMITS.maxPayloadBytes} bytes`,
       );
     }
-    if (!Value.Check(project.inputSchema, task.payload)) {
-      const first = Value.Errors(project.inputSchema, task.payload)[0];
-      const where = first ? `${first.instancePath || '/'}: ${first.message}` : 'invalid';
+    if (!check.ok) {
+      const first = check.issues[0];
+      const where = first ? `${first.path}: ${first.message}` : 'invalid';
       throw new HttpError(
         'bad_request',
         `tasks[${index}].payload does not match input_schema (${where})`,

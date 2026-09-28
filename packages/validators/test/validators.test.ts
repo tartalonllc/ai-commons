@@ -1,7 +1,11 @@
+import type { ProjectDefinition } from '@ai-commons/protocol';
 import { describe, expect, it } from 'vitest';
 import {
   canonicalJson,
+  checkAgainstSchema,
+  checkInput,
   checkOutput,
+  checkProjectDefinition,
   checkProjectSchema,
   consensusKey,
   evaluateConsensus,
@@ -110,5 +114,113 @@ describe('evaluateConsensus', () => {
 
   it('accepts a single result when replication factor is 1', () => {
     expect(evaluateConsensus([c('w1', 'x')], ['field'], 1).status).toBe('accepted');
+  });
+});
+
+describe('checkAgainstSchema / checkInput', () => {
+  const inputSchema = {
+    type: 'object',
+    required: ['abstract'],
+    properties: { abstract: { type: 'string' } },
+  };
+
+  it('distinguishes size failures from schema failures', () => {
+    const tooBig = checkAgainstSchema(inputSchema, { abstract: 'x'.repeat(100) }, { maxBytes: 50 });
+    expect(tooBig).toMatchObject({ ok: false, reason: 'too_large' });
+    const wrong = checkAgainstSchema(inputSchema, { abstract: 1 }, { maxBytes: 50 });
+    expect(wrong).toMatchObject({ ok: false, reason: 'schema' });
+    if (!wrong.ok) expect(wrong.issues[0]?.path).toBe('/abstract');
+  });
+
+  it('caps the number of reported issues', () => {
+    const schema = {
+      type: 'object',
+      properties: Object.fromEntries(
+        Array.from({ length: 10 }, (_, i) => [`f${i}`, { type: 'string' }]),
+      ),
+    };
+    const value = Object.fromEntries(Array.from({ length: 10 }, (_, i) => [`f${i}`, i]));
+    const check = checkAgainstSchema(schema, value, { maxBytes: 10_000, maxIssues: 3 });
+    expect(check.ok).toBe(false);
+    if (!check.ok) expect(check.issues).toHaveLength(3);
+  });
+
+  it('checkInput allows payloads well above the result limit', () => {
+    const payload = { abstract: 'x'.repeat(100_000) };
+    expect(checkInput(inputSchema, payload)).toEqual({ ok: true });
+    expect(checkOutput(inputSchema, payload)).toMatchObject({ ok: false, reason: 'too_large' });
+  });
+
+  it('checkInput rejects payloads over 1 MB', () => {
+    const payload = { abstract: 'x'.repeat(1_100_000) };
+    expect(checkInput(inputSchema, payload)).toMatchObject({ ok: false, reason: 'too_large' });
+  });
+});
+
+describe('checkProjectDefinition', () => {
+  const def: ProjectDefinition = {
+    id: 'demo-project',
+    name: 'Demo',
+    description: '',
+    version: '1.0.0',
+    category: 'science',
+    input_schema: { type: 'object', properties: { title: { type: 'string' } } },
+    output_schema: { type: 'object', properties: { field: { type: 'string' } } },
+    prompt: { system: 'Classify.', user: '{{title}}' },
+    requirements: {
+      capability: 'text_generation',
+      minimum_context_window: 8192,
+      max_output_tokens: 256,
+      local_models_only: false,
+    },
+    validation: { mode: 'consensus', replication_factor: 2, consensus_fields: ['field'] },
+  };
+  const messages = (d: ProjectDefinition) => checkProjectDefinition(d).map((i) => i.message);
+
+  it('accepts a consistent definition', () => {
+    expect(checkProjectDefinition(def)).toEqual([]);
+  });
+
+  it('flags placeholders that are not input properties', () => {
+    expect(
+      checkProjectDefinition({ ...def, prompt: { system: '{{secret}}', user: '{{title}}' } }),
+    ).toEqual([
+      {
+        path: '/prompt/system',
+        message: 'placeholder "{{secret}}" is not an input_schema property',
+      },
+    ]);
+  });
+
+  it('requires input properties', () => {
+    expect(messages({ ...def, input_schema: { type: 'object' } })).toContain(
+      'input schema must declare properties',
+    );
+  });
+
+  it('validates consensus settings', () => {
+    expect(
+      messages({ ...def, validation: { mode: 'consensus', replication_factor: 2 } }),
+    ).toContain('consensus mode requires at least one consensus field');
+    expect(
+      messages({
+        ...def,
+        validation: { mode: 'consensus', replication_factor: 1, consensus_fields: ['field'] },
+      }),
+    ).toContain('consensus mode requires replication_factor >= 2');
+    expect(
+      messages({
+        ...def,
+        validation: { mode: 'consensus', replication_factor: 2, consensus_fields: ['nope'] },
+      }),
+    ).toContain('"nope" is not an output_schema property');
+  });
+
+  it('prefixes schema issues with the schema location', () => {
+    const issues = checkProjectDefinition({
+      ...def,
+      output_schema: { type: 'object', properties: { field: { $ref: '#/x' } } },
+    });
+    expect(issues[0]?.path).toBe('/output_schema/properties/field/$ref');
   });
 });

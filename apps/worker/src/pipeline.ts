@@ -1,5 +1,4 @@
 import {
-  jsonByteLength,
   LIMITS,
   PromptRenderError,
   renderPrompt,
@@ -18,8 +17,7 @@ import {
   type InferenceRequest,
   type InferenceResult,
 } from '@ai-commons/provider-core';
-import { checkOutput, checkProjectSchema } from '@ai-commons/validators';
-import Value from 'typebox/value';
+import { checkInput, checkOutput, checkProjectSchema } from '@ai-commons/validators';
 import type { BudgetLimiter } from './budget.js';
 import { remoteAllowedFor, type ProviderConfig, type WorkerConfig } from './config.js';
 import { CoordinatorError, type CoordinatorClient } from './coordinator-client.js';
@@ -264,11 +262,11 @@ export class TaskExecutor {
       }
     }
 
-    if (jsonByteLength(task.payload) > LIMITS.maxPayloadBytes) {
-      throw new TaskFailure('limit_exceeded', 'payload exceeds local size limit');
-    }
-    if (!Value.Check(project.input_schema, task.payload)) {
-      throw new TaskFailure('other', 'payload does not match project input schema');
+    const input = checkInput(project.input_schema, task.payload);
+    if (!input.ok) {
+      throw input.reason === 'too_large'
+        ? new TaskFailure('limit_exceeded', 'payload exceeds local size limit')
+        : new TaskFailure('other', 'payload does not match project input schema');
     }
 
     let rendered;
