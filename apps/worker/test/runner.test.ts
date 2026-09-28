@@ -313,6 +313,68 @@ describe('WorkerRunner pipeline', () => {
     expect(coordinator.state.fails[0]?.body.reason).toBe('budget_exceeded');
   });
 
+  describe('charging failed remote calls by billing verdict', () => {
+    const remoteConfig: Partial<WorkerConfig> = {
+      limits: {
+        api: { daily_usd: 1, monthly_usd: 5 },
+        local: { cpu_percent: 25, gpu_percent: 50 },
+      },
+      projects: { categories: 'all', allow_remote_for_projects: 'all' },
+    };
+
+    const runWith = async (behaviors: ReturnType<typeof fail>[]) => {
+      coordinator.state.queue.push(leasedTask(1));
+      const remote = new FakeProvider('openai', 'remote', behaviors, { estimateUsd: 0.01 });
+      const { runner } = await makeRunner({ remote, config: remoteConfig });
+      await runner.run({ maxTasks: 1 });
+      return { remote, spent: runner.budgetLimiter.spent().day_usd };
+    };
+
+    it('releases the reservation when the provider definitely did not bill', async () => {
+      const { remote, spent } = await runWith([
+        fail('rate_limited', 'slow down', false),
+        fail('rate_limited', 'slow down', false),
+        fail('rate_limited', 'slow down', false),
+      ]);
+      expect(remote.calls).toHaveLength(3);
+      expect(spent).toBe(0);
+    });
+
+    it('charges the full reservation when billed without reported usage', async () => {
+      const { remote, spent } = await runWith([
+        fail('invalid_output', 'bad json', true),
+        fail('invalid_output', 'bad json', true),
+        fail('invalid_output', 'bad json', true),
+      ]);
+      expect(remote.calls).toHaveLength(3);
+      expect(spent).toBeCloseTo(0.03, 10);
+    });
+
+    it('charges the full reservation when billing is unknown, even for server errors', async () => {
+      const { remote, spent } = await runWith([
+        fail('unavailable', 'HTTP 500'),
+        fail('timeout', 'timed out'),
+        fail('unavailable', 'HTTP 502'),
+      ]);
+      expect(remote.calls).toHaveLength(3);
+      expect(spent).toBeCloseTo(0.03, 10);
+    });
+
+    it('does not double-charge a settled call whose output fails validation', async () => {
+      coordinator.state.queue.push(leasedTask(1));
+      const remote = new FakeProvider(
+        'openai',
+        'remote',
+        [ok({ wrong: true }), ok({ wrong: true }), ok({ wrong: true })],
+        { estimateUsd: 0.01, costPerCall: 0.002 },
+      );
+      const { runner } = await makeRunner({ remote, config: remoteConfig });
+      await runner.run({ maxTasks: 1 });
+      expect(remote.calls).toHaveLength(3);
+      expect(runner.budgetLimiter.spent().day_usd).toBeCloseTo(0.006, 10);
+    });
+  });
+
   it('rejects payloads that do not match the project input schema', async () => {
     coordinator.state.queue.push(leasedTask(1, { payload: { title: 5 } }));
     const local = new FakeProvider('ollama', 'local');

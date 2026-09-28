@@ -120,7 +120,25 @@ describe('OllamaProvider.execute', () => {
     ['network-error', 'unavailable', true],
   ] as const)('maps %j to %s', async (reply, code, retryable) => {
     const { ollama } = provider(reply as Reply);
-    await expect(ollama.execute(request())).rejects.toMatchObject({ code, retryable });
+    await expect(ollama.execute(request())).rejects.toMatchObject({
+      code,
+      retryable,
+      billed: false,
+    });
+  });
+
+  it('reports every local failure as unbilled', async () => {
+    const replies: Reply[] = ['hang', chatReply('not json'), { status: 500 }, 'network-error'];
+    for (const reply of replies) {
+      const error = await provider(reply)
+        .ollama.execute(request({ timeout_ms: 20 }))
+        .catch((e: unknown) => e);
+      expect(error, JSON.stringify(reply)).toMatchObject({ billed: false });
+    }
+    const controller = new AbortController();
+    const pending = provider('hang').ollama.execute(request({ signal: controller.signal }));
+    controller.abort();
+    await expect(pending).rejects.toMatchObject({ code: 'cancelled', billed: false });
   });
 
   it('passes Retry-After through as retryAfterMs', async () => {

@@ -96,15 +96,6 @@ interface Prepared {
   candidates: Candidate[];
 }
 
-/** Errors raised before a request is billed; their reservation is released, not charged. */
-const UNBILLED_ERRORS = new Set([
-  'auth',
-  'bad_request',
-  'rate_limited',
-  'model_not_found',
-  'unavailable',
-]);
-
 function providerFailureReason(error: ProviderError): FailureReason {
   switch (error.code) {
     case 'timeout':
@@ -440,7 +431,10 @@ export class TaskExecutor {
                 );
 
         if (reservationId !== undefined) {
-          if (UNBILLED_ERRORS.has(perr.code)) this.deps.budget.release(reservationId);
+          // Only a definite "not billed" verdict frees the reservation; billed or
+          // unknown failures are charged at the reserved worst case. No-op if the
+          // call already settled (e.g. output failed schema validation afterwards).
+          if (perr.billed === false) this.deps.budget.release(reservationId);
           else this.deps.budget.settle(reservationId, { actual_usd: Number.NaN });
         }
 

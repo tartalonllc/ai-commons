@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  failedBeforeSend,
   normalizeBaseUrl,
   parseRetryAfter,
   requestJson,
@@ -51,7 +52,7 @@ describe('requestJson', () => {
     );
   });
 
-  it('does not call fetch when already cancelled', async () => {
+  it('does not call fetch when already cancelled, and marks it unbilled', async () => {
     let called = false;
     const fetchFn: FetchFn = async () => {
       called = true;
@@ -59,13 +60,14 @@ describe('requestJson', () => {
     };
     await expect(
       requestJson(fetchFn, 'http://h', {}, { timeoutMs: 1_000, signal: AbortSignal.abort() }),
-    ).rejects.toMatchObject({ code: 'cancelled' });
+    ).rejects.toMatchObject({ code: 'cancelled', billed: false });
     expect(called).toBe(false);
   });
 
-  it('maps timeouts and mid-flight cancellation', async () => {
+  it('maps timeouts and mid-flight cancellation with unknown billing', async () => {
     await expect(requestJson(hanging, 'http://h', {}, { timeoutMs: 20 })).rejects.toMatchObject({
       code: 'timeout',
+      billed: undefined,
     });
     const controller = new AbortController();
     const pending = requestJson(
@@ -78,16 +80,16 @@ describe('requestJson', () => {
       },
     );
     controller.abort();
-    await expect(pending).rejects.toMatchObject({ code: 'cancelled' });
+    await expect(pending).rejects.toMatchObject({ code: 'cancelled', billed: undefined });
   });
 
-  it('maps network failures to unavailable', async () => {
+  it('marks connection refusals unbilled but generic network failures unknown', async () => {
     await expect(
       requestJson(failing(refused()), 'http://h', {}, { timeoutMs: 1_000 }),
-    ).rejects.toMatchObject({ code: 'unavailable' });
+    ).rejects.toMatchObject({ code: 'unavailable', billed: false });
     await expect(
       requestJson(failing(new TypeError('fetch failed')), 'http://h', {}, { timeoutMs: 1_000 }),
-    ).rejects.toMatchObject({ code: 'unavailable' });
+    ).rejects.toMatchObject({ code: 'unavailable', billed: undefined });
   });
 
   it('never attaches the underlying error as a cause', async () => {
@@ -98,19 +100,31 @@ describe('requestJson', () => {
   });
 });
 
+describe('failedBeforeSend', () => {
+  it('walks the cause chain for connection-level codes', () => {
+    expect(failedBeforeSend(refused())).toBe(true);
+    expect(failedBeforeSend({ code: 'ENOTFOUND' })).toBe(true);
+    expect(failedBeforeSend({ code: 'ECONNRESET' })).toBe(false);
+    expect(failedBeforeSend(new TypeError('fetch failed'))).toBe(false);
+    expect(failedBeforeSend(null)).toBe(false);
+  });
+});
+
 describe('statusError', () => {
   const h = new Headers({ 'retry-after': '3' });
   it.each([
-    [401, 'auth'],
-    [403, 'auth'],
-    [404, 'model_not_found'],
-    [429, 'rate_limited'],
-    [400, 'bad_request'],
-    [422, 'bad_request'],
-    [500, 'unavailable'],
-    [503, 'unavailable'],
-  ])('HTTP %i → %s', (status, code) => {
-    expect(statusError('P', status, h).code).toBe(code);
+    [401, 'auth', false],
+    [403, 'auth', false],
+    [404, 'model_not_found', false],
+    [429, 'rate_limited', false],
+    [400, 'bad_request', false],
+    [422, 'bad_request', false],
+    [500, 'unavailable', undefined],
+    [503, 'unavailable', undefined],
+  ])('HTTP %i → %s, billed %s', (status, code, billed) => {
+    const error = statusError('P', status, h);
+    expect(error.code).toBe(code);
+    expect(error.billed).toBe(billed);
   });
 
   it('carries Retry-After on 429 and appends safe detail', () => {
@@ -132,11 +146,11 @@ describe('parseRetryAfter', () => {
 });
 
 describe('normalizeBaseUrl', () => {
-  it('strips trailing slashes and rejects unsafe URLs', () => {
+  it('strips trailing slashes and rejects unsafe URLs unbilled', () => {
     expect(normalizeBaseUrl('http://host:1/v1/', 'P')).toBe('http://host:1/v1');
     for (const raw of ['ftp://h', 'nope', 'http://u:p@h', 'http://h/?q=1', 'http://h/#x']) {
       expect(() => normalizeBaseUrl(raw, 'P'), raw).toThrow(
-        expect.objectContaining({ code: 'bad_request' }),
+        expect.objectContaining({ code: 'bad_request', billed: false }),
       );
     }
   });

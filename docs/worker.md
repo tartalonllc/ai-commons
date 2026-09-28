@@ -65,10 +65,10 @@ lease as expired, the task is abandoned without submission. Heartbeats run every
   sharing the database.
 - Reserved and orphaned rows count at their reserved amount; settled rows at
   actual cost.
-- If a paid provider does not report actual cost, or fails in a way that may
-  have been billed (timeout, invalid output, unknown), the full reservation is
-  charged. Only pre-billing errors (auth, bad request, rate limit, unavailable,
-  missing model) release it.
+- If a paid provider does not report actual cost, the full reservation is
+  charged. A failed call is settled by its `ProviderError.billed` verdict (see
+  `docs/providers.md`): only `billed: false` releases the reservation;
+  `billed: true` and unknown (`undefined`) are charged in full.
 - Reservations older than the task runtime limit + 1 minute (crash leftovers)
   are finalized as spent.
 - Actual cost higher than the estimate is recorded truthfully and blocks every
