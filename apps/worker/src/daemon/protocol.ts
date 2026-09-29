@@ -7,6 +7,13 @@ import type { CurrentTask } from '../runner.js';
 /**
  * Newline-delimited JSON over stdio between the desktop shell and the worker
  * daemon. Mirrored by `MAX_LINE_BYTES` in apps/desktop/src-tauri/src/framing.rs.
+ *
+ * This cap is a backstop, not the primary defense: `readline` buffers an
+ * entire line into memory before `parseRequestLine` ever sees it, so the size
+ * check below runs only after that allocation already happened. The only
+ * peer expected on the other end of this pipe is the Rust shell, which caps
+ * its own writes to this same limit. Do not expose the daemon's stdin to a
+ * less-trusted peer.
  */
 export const DAEMON_MAX_LINE_BYTES = 1_000_000;
 
@@ -24,6 +31,7 @@ const Empty = Type.Object({}, { additionalProperties: false });
 export const MethodParams = {
   getStatus: Empty,
   getConfig: Empty,
+  /** `config` is untrusted until validateConfig; do not log or serialize raw params. */
   saveConfig: Type.Object({ config: Type.Unknown() }, { additionalProperties: false }),
   setMode: Type.Object({ mode: ScheduleMode }, { additionalProperties: false }),
   resume: Empty,
@@ -89,9 +97,13 @@ export interface DaemonEvent {
   data: DaemonStatus;
 }
 
+/** Ties `method` to `params` so `switch (req.method)` narrows `req.params` with no cast. */
+export type ValidRequest = {
+  [M in DaemonMethod]: { ok: true; id: string; method: M; params: MethodParamsOf<M> };
+}[DaemonMethod];
+
 export type ParsedRequest =
-  | { ok: true; id: string; method: DaemonMethod; params: unknown }
-  | { ok: false; id: string | null; code: DaemonErrorCode; message: string };
+  ValidRequest | { ok: false; id: string | null; code: DaemonErrorCode; message: string };
 
 function isMethod(name: string): name is DaemonMethod {
   return Object.hasOwn(MethodParams, name);
@@ -102,6 +114,19 @@ function describeIssues(issues: ValidationIssue[]): string {
     .slice(0, 3)
     .map((i) => `${i.path}: ${i.message}`)
     .join('; ');
+}
+
+/**
+ * Best-effort id recovery for a request whose envelope failed validation, so
+ * the caller can still match the error to the request it sent. Returns null
+ * for anything that isn't a plain object with a usable `id` string.
+ */
+function extractId(json: unknown): string | null {
+  if (typeof json !== 'object' || json === null || Array.isArray(json)) return null;
+  if (!Object.hasOwn(json, 'id')) return null;
+  const { id } = json as Record<string, unknown>;
+  if (typeof id !== 'string' || id.length < 1 || id.length > 64) return null;
+  return id;
 }
 
 /** Validates one inbound line. Never throws. */
@@ -119,7 +144,7 @@ export function parseRequestLine(line: string): ParsedRequest {
   if (!envelope.ok) {
     return {
       ok: false,
-      id: null,
+      id: extractId(json),
       code: 'bad_request',
       message: `Invalid request: ${describeIssues(envelope.issues)}`,
     };
@@ -137,5 +162,7 @@ export function parseRequestLine(line: string): ParsedRequest {
       message: `Invalid params: ${describeIssues(params.issues)}`,
     };
   }
-  return { ok: true, id, method, params: params.value };
+  // Safe: `params.value` was just validated against `MethodParams[method]`, so it
+  // matches `MethodParamsOf<typeof method>` for this specific `method`.
+  return { ok: true, id, method, params: params.value } as ValidRequest;
 }
