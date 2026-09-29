@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { loadConfig, saveConfig, type WorkerConfig } from '../src/config.js';
+import type { FetchFn } from '../src/coordinator-client.js';
 import { WorkerDatabase } from '../src/db.js';
 import { ProviderRegistry } from '../src/providers/registry.js';
 import { WorkerRunner } from '../src/runner.js';
@@ -43,6 +44,9 @@ interface Setup {
   config?: Partial<WorkerConfig>;
   secrets?: MemorySecretStore;
   onSleep?: (ms: number, configFile: string) => Promise<void>;
+  isIdle?: () => boolean;
+  onChange?: () => void;
+  fetch?: FetchFn;
 }
 
 async function makeRunner(setup: Setup) {
@@ -100,6 +104,9 @@ async function makeRunner(setup: Setup) {
       delays.push(ms);
       await setup.onSleep?.(ms, configFile);
     },
+    ...(setup.isIdle ? { isIdle: setup.isIdle } : {}),
+    ...(setup.onChange ? { onChange: setup.onChange } : {}),
+    ...(setup.fetch ? { fetch: setup.fetch } : {}),
   });
   await runner.init();
   return { runner, log, delays, configFile, secrets };
@@ -453,5 +460,61 @@ describe('WorkerRunner pipeline', () => {
     // Payload text is not logged either.
     expect(log.text()).not.toContain('Abstract text 1');
     db = new WorkerDatabase(join(dir, 'worker.db'));
+  });
+});
+
+describe('idle-only scheduling', () => {
+  it('is refused without an idle source', async () => {
+    const local = new FakeProvider('ollama', 'local');
+    await expect(
+      makeRunner({ local, config: { schedule: { mode: 'idle_only' } } }),
+    ).rejects.toThrow(/desktop app/);
+  });
+
+  it('waits until the machine is idle before leasing', async () => {
+    coordinator.state.queue.push(leasedTask(1));
+    let idle = false;
+    let waits = 0;
+    const local = new FakeProvider('ollama', 'local');
+    const { runner, delays } = await makeRunner({
+      local,
+      config: { schedule: { mode: 'idle_only' } },
+      isIdle: () => idle,
+      onSleep: async () => {
+        waits++;
+        if (waits === 2) idle = true;
+      },
+    });
+    await runner.run({ maxTasks: 1 });
+    expect(delays.slice(0, 2)).toEqual([5_000, 5_000]);
+    expect(coordinator.state.results).toHaveLength(1);
+    expect((coordinator.state.heartbeats[0] as { status: string }).status).toBe('paused');
+  });
+
+  it('finishes the current task when the user returns, then stops leasing', async () => {
+    coordinator.state.queue.push(leasedTask(1), leasedTask(2));
+    let idle = true;
+    let waits = 0;
+    let stop: (() => void) | undefined;
+    const local = new FakeProvider('ollama', 'local', [
+      (req) => {
+        idle = false; // the user moves the mouse mid-task
+        return ok({ field: 'biology', confidence: 0.9 })(req);
+      },
+    ]);
+    const { runner } = await makeRunner({
+      local,
+      config: { schedule: { mode: 'idle_only' } },
+      isIdle: () => idle,
+      onSleep: async () => {
+        waits++;
+        if (waits >= 3) stop?.();
+      },
+    });
+    stop = () => runner.requestStop();
+    await runner.run();
+    expect(local.calls).toHaveLength(1);
+    expect(coordinator.state.results).toHaveLength(1);
+    expect(coordinator.state.queue).toHaveLength(1);
   });
 });

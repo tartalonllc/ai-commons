@@ -57,6 +57,11 @@ export interface RunnerDeps {
   sleep?: SleepFn;
   retryDelaysMs?: readonly number[];
   now?: () => number;
+  /**
+   * Idle source for `idle_only` mode. The desktop app feeds it from OS input idle
+   * time. Without one, `idle_only` is refused at init.
+   */
+  isIdle?: () => boolean;
 }
 
 export class WorkerRunner {
@@ -96,8 +101,10 @@ export class WorkerRunner {
 
   async init(): Promise<void> {
     this.config = await this.deps.loadConfig();
-    if (this.config.schedule.mode === 'idle_only') {
-      throw new Error('Idle-only scheduling is not supported yet; use "active" or "paused".');
+    if (this.config.schedule.mode === 'idle_only' && !this.deps.isIdle) {
+      throw new Error(
+        'Idle-only scheduling needs the desktop app; use "active" or "paused" with the CLI.',
+      );
     }
     this.client = new CoordinatorClient({
       baseUrl: this.config.coordinator_url,
@@ -275,9 +282,21 @@ export class WorkerRunner {
     };
   }
 
+  /** Whether the schedule allows taking new work right now. A running task is never interrupted. */
+  private mayLease(): boolean {
+    switch (this.config.schedule.mode) {
+      case 'active':
+        return true;
+      case 'idle_only':
+        return this.deps.isIdle?.() ?? false;
+      case 'paused':
+        return false;
+    }
+  }
+
   private status(): WorkerStatus {
-    if (this.config.schedule.mode === 'paused') return 'paused';
-    return this.busy ? 'busy' : 'available';
+    if (this.busy) return 'busy';
+    return this.mayLease() ? 'available' : 'paused';
   }
 
   private async heartbeat(): Promise<void> {
@@ -335,7 +354,7 @@ export class WorkerRunner {
             'config reload failed; keeping previous config',
           );
         }
-        if (this.config.schedule.mode !== 'active') {
+        if (!this.mayLease()) {
           await this.idle(PAUSED_POLL_MS);
           continue;
         }
