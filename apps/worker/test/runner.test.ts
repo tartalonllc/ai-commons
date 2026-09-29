@@ -6,7 +6,7 @@ import { loadConfig, saveConfig, type WorkerConfig } from '../src/config.js';
 import type { FetchFn } from '../src/coordinator-client.js';
 import { WorkerDatabase } from '../src/db.js';
 import { ProviderRegistry } from '../src/providers/registry.js';
-import { WorkerRunner } from '../src/runner.js';
+import { WorkerRunner, type RunnerSnapshot } from '../src/runner.js';
 import { MemorySecretStore, secretAccounts } from '../src/secrets.js';
 import {
   captureLogger,
@@ -516,5 +516,56 @@ describe('idle-only scheduling', () => {
     expect(local.calls).toHaveLength(1);
     expect(coordinator.state.results).toHaveLength(1);
     expect(coordinator.state.queue).toHaveLength(1);
+  });
+});
+
+describe('runner snapshot', () => {
+  it('reports connection, the current task, and change notifications', async () => {
+    coordinator.state.queue.push(leasedTask(1));
+    let changes = 0;
+    let during: RunnerSnapshot | undefined;
+    let runnerRef: WorkerRunner | undefined;
+    const local = new FakeProvider('ollama', 'local', [
+      (req) => {
+        during = runnerRef?.snapshot();
+        return ok({ field: 'biology', confidence: 0.9 })(req);
+      },
+    ]);
+    const { runner } = await makeRunner({ local, onChange: () => changes++ });
+    runnerRef = runner;
+    expect(runner.snapshot()).toEqual({ connection: 'connected' });
+    expect(runner.activeProviderIds()).toEqual(['ollama']);
+
+    await runner.run({ maxTasks: 1 });
+
+    expect(during).toEqual({
+      connection: 'connected',
+      current: {
+        project_id: 'open-literature-demo',
+        project_name: 'Open Literature Classification',
+        task_id: 'task_000001',
+      },
+    });
+    expect(runner.snapshot().current).toBeUndefined();
+    expect(changes).toBeGreaterThanOrEqual(3);
+  });
+
+  it('goes offline with a readable error when the coordinator is unreachable', async () => {
+    let stop: (() => void) | undefined;
+    const local = new FakeProvider('ollama', 'local');
+    const { runner } = await makeRunner({
+      local,
+      fetch: async (input, init) => {
+        if (input.endsWith('/tasks/lease')) throw new TypeError('fetch failed');
+        return fetch(input, init);
+      },
+      onSleep: async () => stop?.(),
+    });
+    stop = () => runner.requestStop();
+    await runner.run();
+    expect(runner.snapshot()).toEqual({
+      connection: 'offline',
+      last_error: 'coordinator unreachable (TypeError)',
+    });
   });
 });

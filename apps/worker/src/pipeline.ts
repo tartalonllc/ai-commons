@@ -119,6 +119,11 @@ export class TaskExecutor {
     this.now = deps.now ?? Date.now;
   }
 
+  /** Last loaded definition of a project, for status display only. */
+  cachedProject(projectId: string): Project | undefined {
+    return this.projects.get(projectId);
+  }
+
   private scrub(text: string): string {
     return scrubSecrets(text, this.deps.knownSecrets?.() ?? []).slice(
       0,

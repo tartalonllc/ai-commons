@@ -10,7 +10,7 @@ import { BudgetLimiter } from './budget.js';
 import type { WorkerConfig } from './config.js';
 import { CoordinatorClient, CoordinatorError, type FetchFn } from './coordinator-client.js';
 import type { WorkerDatabase } from './db.js';
-import type { Logger } from './logger.js';
+import { scrubSecrets, type Logger } from './logger.js';
 import {
   abortableSleep,
   TaskExecutor,
@@ -45,6 +45,20 @@ export interface Session {
   leaseDurationMs: number;
 }
 
+export type ConnectionState = 'connecting' | 'connected' | 'offline';
+
+export interface CurrentTask {
+  project_id: string;
+  project_name?: string;
+  task_id: string;
+}
+
+export interface RunnerSnapshot {
+  connection: ConnectionState;
+  current?: CurrentTask;
+  last_error?: string;
+}
+
 export interface RunnerDeps {
   db: WorkerDatabase;
   secrets: SecretStore;
@@ -62,6 +76,8 @@ export interface RunnerDeps {
    * time. Without one, `idle_only` is refused at init.
    */
   isIdle?: () => boolean;
+  /** Called whenever `snapshot()` may have changed (drives desktop status events). */
+  onChange?: () => void;
 }
 
 export class WorkerRunner {
@@ -80,6 +96,10 @@ export class WorkerRunner {
   private busy = false;
   private heartbeatTimer: NodeJS.Timeout | undefined;
   readonly outcomes: TaskOutcome[] = [];
+
+  private connection: ConnectionState = 'connecting';
+  private lastError: string | undefined;
+  private currentTask: { project_id: string; task_id: string } | undefined;
 
   constructor(private readonly deps: RunnerDeps) {
     this.sleep = deps.sleep ?? abortableSleep;
@@ -140,6 +160,7 @@ export class WorkerRunner {
       ...(this.deps.sleep ? { sleep: this.deps.sleep } : {}),
       ...(this.deps.now ? { now: this.deps.now } : {}),
     });
+    this.markConnected();
   }
 
   private async initProviders(): Promise<void> {
@@ -299,6 +320,40 @@ export class WorkerRunner {
     return this.mayLease() ? 'available' : 'paused';
   }
 
+  private changed(): void {
+    this.deps.onChange?.();
+  }
+
+  private markConnected(): void {
+    if (this.connection === 'connected' && this.lastError === undefined) return;
+    this.connection = 'connected';
+    this.lastError = undefined;
+    this.changed();
+  }
+
+  private markOffline(error: unknown): void {
+    this.connection = 'offline';
+    const text = error instanceof Error ? error.message : String(error);
+    this.lastError = scrubSecrets(text, this.knownSecrets());
+    this.changed();
+  }
+
+  snapshot(): RunnerSnapshot {
+    const snap: RunnerSnapshot = { connection: this.connection };
+    if (this.currentTask) {
+      const name = this.executor.cachedProject(this.currentTask.project_id)?.name;
+      snap.current =
+        name === undefined ? { ...this.currentTask } : { ...this.currentTask, project_name: name };
+    }
+    if (this.lastError !== undefined) snap.last_error = this.lastError;
+    return snap;
+  }
+
+  /** Providers that passed health checks at init; undefined before init completes. */
+  activeProviderIds(): string[] | undefined {
+    return this.session ? this.providers.map((p) => p.provider.id) : undefined;
+  }
+
   private async heartbeat(): Promise<void> {
     const session = this.session;
     if (!session) return;
@@ -363,7 +418,9 @@ export class WorkerRunner {
         try {
           leased = await this.client.lease(this.leaseRequest());
           backoff = 1_000;
+          this.markConnected();
         } catch (error) {
+          this.markOffline(error);
           const retryAfter = error instanceof CoordinatorError ? error.retryAfterMs : undefined;
           logger.warn({ err: (error as Error).message }, 'lease request failed');
           await this.idle(retryAfter ?? backoff);
@@ -376,12 +433,16 @@ export class WorkerRunner {
         }
 
         this.busy = true;
+        this.currentTask = { project_id: leased.task.project_id, task_id: leased.task.id };
+        this.changed();
         try {
           const outcome = await this.executor.run(leased.task, this.hardStop.signal);
           this.outcomes.push(outcome);
         } finally {
           this.busy = false;
+          this.currentTask = undefined;
           processed++;
+          this.changed();
         }
       }
     } finally {
