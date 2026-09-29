@@ -495,7 +495,7 @@ describe('idle-only scheduling', () => {
     coordinator.state.queue.push(leasedTask(1), leasedTask(2));
     let idle = true;
     let waits = 0;
-    let stop: (() => void) | undefined;
+    const stop: { fn?: () => void } = {};
     const local = new FakeProvider('ollama', 'local', [
       (req) => {
         idle = false; // the user moves the mouse mid-task
@@ -508,10 +508,10 @@ describe('idle-only scheduling', () => {
       isIdle: () => idle,
       onSleep: async () => {
         waits++;
-        if (waits >= 3) stop?.();
+        if (waits >= 3) stop.fn?.();
       },
     });
-    stop = () => runner.requestStop();
+    stop.fn = () => runner.requestStop();
     await runner.run();
     expect(local.calls).toHaveLength(1);
     expect(coordinator.state.results).toHaveLength(1);
@@ -524,15 +524,15 @@ describe('runner snapshot', () => {
     coordinator.state.queue.push(leasedTask(1));
     let changes = 0;
     let during: RunnerSnapshot | undefined;
-    let runnerRef: WorkerRunner | undefined;
+    const runnerRef: { current?: WorkerRunner } = {};
     const local = new FakeProvider('ollama', 'local', [
       (req) => {
-        during = runnerRef?.snapshot();
+        during = runnerRef.current?.snapshot();
         return ok({ field: 'biology', confidence: 0.9 })(req);
       },
     ]);
     const { runner } = await makeRunner({ local, onChange: () => changes++ });
-    runnerRef = runner;
+    runnerRef.current = runner;
     expect(runner.snapshot()).toEqual({ connection: 'connected' });
     expect(runner.activeProviderIds()).toEqual(['ollama']);
 
@@ -551,7 +551,7 @@ describe('runner snapshot', () => {
   });
 
   it('goes offline with a readable error when the coordinator is unreachable', async () => {
-    let stop: (() => void) | undefined;
+    const stop: { fn?: () => void } = {};
     const local = new FakeProvider('ollama', 'local');
     const { runner } = await makeRunner({
       local,
@@ -559,9 +559,9 @@ describe('runner snapshot', () => {
         if (input.endsWith('/tasks/lease')) throw new TypeError('fetch failed');
         return fetch(input, init);
       },
-      onSleep: async () => stop?.(),
+      onSleep: async () => stop.fn?.(),
     });
-    stop = () => runner.requestStop();
+    stop.fn = () => runner.requestStop();
     await runner.run();
     expect(runner.snapshot()).toEqual({
       connection: 'offline',
