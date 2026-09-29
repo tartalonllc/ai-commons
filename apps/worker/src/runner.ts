@@ -363,12 +363,13 @@ export class WorkerRunner {
     this.changed();
   }
 
-  /** The coordinator was reached but refused the request; connection stays up. */
+  /** The coordinator was reached but refused the request; a refusal still proves it's up. */
   private noteCoordinatorError(error: CoordinatorError): void {
     const scrubbed = this.scrubError(error);
-    if (this.lastError === scrubbed) return;
+    const changed = this.connection !== 'connected' || this.lastError !== scrubbed;
+    this.connection = 'connected';
     this.lastError = scrubbed;
-    this.changed();
+    if (changed) this.changed();
   }
 
   /** True only for failures where the coordinator itself could not be reached. */
@@ -405,7 +406,11 @@ export class WorkerRunner {
       this.markConnected();
     } catch (error) {
       this.deps.logger.warn({ err: (error as Error).message }, 'heartbeat failed');
-      this.markOffline(error);
+      if (this.isTransportFailure(error)) {
+        this.markOffline(error);
+      } else if (error instanceof CoordinatorError) {
+        this.noteCoordinatorError(error);
+      }
     }
   }
 

@@ -614,7 +614,7 @@ describe('runner snapshot', () => {
     expect(runner.snapshot()).toEqual({ connection: 'connected' });
   });
 
-  it('a heartbeat clears an offline state left by a failed lease, even while paused', async () => {
+  it('the shutdown heartbeat clears an offline state left by a failed lease, even while paused', async () => {
     const local = new FakeProvider('ollama', 'local');
     let leaseFailed = false;
     const runnerRef: { current?: WorkerRunner } = {};
@@ -675,6 +675,39 @@ describe('runner snapshot', () => {
       onSleep: async () => {
         if (snap === undefined) snap = runnerRef.current?.snapshot();
         runnerRef.current?.requestStop();
+      },
+    });
+    runnerRef.current = runner;
+    await runner.run();
+    expect(snap).toEqual({
+      connection: 'connected',
+      last_error: expect.stringContaining('slow down'),
+    });
+  });
+
+  it('a 429 after a network failure proves the coordinator is reachable again', async () => {
+    const local = new FakeProvider('ollama', 'local');
+    let leaseAttempts = 0;
+    let snap: RunnerSnapshot | undefined;
+    const runnerRef: { current?: WorkerRunner } = {};
+    const { runner } = await makeRunner({
+      local,
+      fetch: async (input, init) => {
+        if (input.endsWith('/tasks/lease')) {
+          leaseAttempts++;
+          if (leaseAttempts === 1) throw new TypeError('fetch failed');
+          if (leaseAttempts === 2) {
+            return new Response(
+              JSON.stringify({ error: { code: 'rate_limited', message: 'slow down' } }),
+              { status: 429, headers: { 'content-type': 'application/json' } },
+            );
+          }
+        }
+        return fetch(input, init);
+      },
+      onSleep: async () => {
+        if (leaseAttempts === 2 && snap === undefined) snap = runnerRef.current?.snapshot();
+        if (leaseAttempts >= 2) runnerRef.current?.requestStop();
       },
     });
     runnerRef.current = runner;
