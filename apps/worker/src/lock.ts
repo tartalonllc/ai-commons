@@ -116,7 +116,13 @@ export function acquireInstanceLock(
         continue;
       }
     } finally {
-      unlinkIfExists(tmp);
+      // Best-effort: a stray `.tmp` file is harmless, and a failure here must
+      // never mask the real outcome of the link attempt above.
+      try {
+        unlinkIfExists(tmp);
+      } catch {
+        // ignore
+      }
     }
 
     let released = false;
