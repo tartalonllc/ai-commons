@@ -1,5 +1,6 @@
 // apps/worker/test/lock.test.ts
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { spawn } from 'node:child_process';
+import { existsSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -45,6 +46,13 @@ describe('acquireInstanceLock', () => {
     lock.release();
   });
 
+  it('treats trailing-garbage content as unparseable and reclaims it', () => {
+    writeFileSync(join(dir, LOCK_FILE), '123abc');
+    const lock = acquireInstanceLock(dir, { pid: 9, alive: () => true });
+    expect(lockText()).toBe('9');
+    lock.release();
+  });
+
   it('does not delete a lock another process has taken over', () => {
     const lock = acquireInstanceLock(dir, { pid: 7, alive: () => true });
     writeFileSync(join(dir, LOCK_FILE), '8');
@@ -54,5 +62,32 @@ describe('acquireInstanceLock', () => {
 
   it('detects the current process as alive', () => {
     expect(processAlive(process.pid)).toBe(true);
+  });
+
+  it('detects an exited child process as not alive', async () => {
+    const child = spawn(process.execPath, ['-e', '']);
+    const pid = child.pid;
+    if (pid === undefined) throw new Error('spawn did not allocate a pid');
+    await new Promise((resolve) => child.on('exit', resolve));
+    expect(processAlive(pid)).toBe(false);
+  });
+
+  it('reclaims a lock whose mtime predates the system boot time, even if the pid is alive', () => {
+    writeFileSync(join(dir, LOCK_FILE), '111');
+    const past = Date.now() - 60_000;
+    utimesSync(join(dir, LOCK_FILE), new Date(past), new Date(past));
+    const lock = acquireInstanceLock(dir, { pid: 222, alive: () => true, bootTime: Date.now() });
+    expect(lockText()).toBe('222');
+    lock.release();
+  });
+
+  it('names the lock file path in the error, with instructions to delete it', () => {
+    acquireInstanceLock(dir, { pid: 111, alive: () => true });
+    expect(() => acquireInstanceLock(dir, { pid: 222, alive: () => true })).toThrow(
+      join(dir, LOCK_FILE),
+    );
+    expect(() => acquireInstanceLock(dir, { pid: 222, alive: () => true })).toThrow(
+      /delete .*worker\.lock/,
+    );
   });
 });
