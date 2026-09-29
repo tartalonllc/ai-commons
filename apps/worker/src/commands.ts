@@ -11,6 +11,7 @@ import {
 } from './config.js';
 import { CoordinatorClient, type FetchFn } from './coordinator-client.js';
 import { WorkerDatabase } from './db.js';
+import { REMOTE_DISCLOSURE } from './disclosure.js';
 import { acquireInstanceLock } from './lock.js';
 import { createFileAndStderrLogger, type Logger } from './logger.js';
 import type { WorkerPaths } from './paths.js';
@@ -39,10 +40,7 @@ export interface CliContext {
   onSignal?: (handler: () => void) => void;
 }
 
-export const REMOTE_DISCLOSURE =
-  'Note: remote providers receive the full task input for every task they process. ' +
-  'Only projects you allow will ever be sent to a remote provider, and projects marked ' +
-  'local_models_only are never sent.';
+export { REMOTE_DISCLOSURE };
 
 const HELP = `AI Commons worker
 
