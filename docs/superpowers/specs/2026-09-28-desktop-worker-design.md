@@ -15,10 +15,11 @@ are out of scope for this milestone.
   supervised child process ("daemon"), talking newline-delimited JSON over stdio.
   No listening ports. All stateful logic (config, keyring, SQLite, budget,
   `WorkerRunner`) stays in the one TypeScript implementation.
-- **Runtime:** the installer bundles a pinned Node 24.x `node.exe` (Tauri
-  `externalBin`), a single esbuild-bundled `worker-daemon.mjs`, and the
-  `@napi-rs/keyring` native addon (Tauri `resources`). Volunteers need nothing
-  else installed.
+- **Runtime:** the installer bundles a pinned Node 24.x `node.exe`, a single
+  esbuild-bundled `worker-daemon.mjs`, and the `@napi-rs/keyring` package with its
+  native addon, all under Tauri `resources` (`runtime/`). Rust starts `node.exe`
+  with `std::process::Command` (`CREATE_NO_WINDOW`), so neither `externalBin`
+  naming nor the shell plugin is needed. Volunteers need nothing else installed.
 - **Rejected:** a localhost HTTP/WebSocket daemon (opens a local attack surface);
   Rust reading SQLite/config directly or porting the worker to Rust (duplicates
   budget/keyring logic that could drift, violating "no spending limit can be
@@ -53,7 +54,8 @@ Responsibilities:
   mid-task, the current task is finished and no new lease is taken. Without an
   `isIdle` source (the CLI), `idle_only` is still refused at `init()`.
 - New optional config field `schedule.idle_after_minutes` (integer 1–240, default 5).
-  The value is used by the Rust idle detector, which reads it from `getConfig`.
+  The daemon reports it in every status event, and the Rust idle detector takes it
+  from there.
 - `lock.ts`: an exclusive lock file `worker.lock` (containing the PID) in the data
   dir. Both the daemon and CLI `start` acquire it; a lock whose PID is no longer
   running is reclaimed. A second instance is refused with a clear message.
@@ -74,7 +76,8 @@ lines produce an error response (`bad_request`) and never terminate the loop.
 | `getStatus`                     | returns `DaemonStatus` (below)                                                                    |
 | `getConfig`                     | returns the current `WorkerConfig` (contains no secrets)                                          |
 | `saveConfig {config}`           | `validateConfig` + `validateCoordinatorUrl`; restarts the runner if coordinator/providers changed |
-| `setMode {mode}`                | `active` / `paused` / `idle_only`, persisted to config                                            |
+| `setMode {mode}`                | `active` / `paused` / `idle_only`, persisted to config; pausing remembers the previous mode       |
+| `resume`                        | restores the mode that was active before the last pause (default `active`)                        |
 | `setKey {provider, key}`        | writes the OS keyring only; the response never contains the key                                   |
 | `deleteKey {provider}`          | removes the key from the keyring                                                                  |
 | `probeProvider {id, endpoint?}` | `healthCheck()` + `getModels()`; returns models with `context_window`                             |
@@ -87,12 +90,15 @@ lines produce an error response (`bad_request`) and never terminate the loop.
 {
   connection: 'connected' | 'connecting' | 'offline' | 'unconfigured';
   worker_id?: string;
+  coordinator_url: string;
   mode: 'active' | 'paused' | 'idle_only';
   idle: boolean;
+  idle_after_minutes: number;
   current?: { project_id: string; project_name?: string; task_id: string };
   today: LocalTotals; month: LocalTotals;          // from localTotals()
-  providers: { id: string; kind: 'local' | 'remote'; enabled: boolean;
-               healthy: boolean; has_key: boolean }[];
+  providers: { id: string; kind: 'local' | 'remote'; display_name: string;
+               enabled: boolean; healthy: boolean | null;   // null = not checked yet
+               requires_key: boolean; has_key: boolean }[];
   limits: { daily_usd: number; monthly_usd: number };
   last_error?: string;                              // passed through scrubSecrets()
 }
@@ -105,18 +111,21 @@ blocks the child.
 ## Rust shell
 
 - **Supervisor:** spawns the daemon at startup. On an unexpected exit it restarts
-  with backoff 1 s → 2 s → … → 60 s; after 5 crashes within 5 minutes it stops and
+  with backoff 1 s → 2 s → 4 s → 8 s; on the 5th crash within 5 minutes it stops and
   the UI shows "Worker stopped" with the last error and a Restart button.
 - **Quit:** sends `shutdown`, waits up to 30 s, then kills the process. A kill
   mid-call is budget-safe: stale reservations are charged in full on next start.
 - **Window close** hides to the tray; contribution continues. The tray menu offers
-  Open, Pause/Resume and Quit, and its icon reflects active / paused / waiting-for-idle.
+  Open, Pause/Resume and Quit; its tooltip reflects Contributing / Paused / Waiting
+  for idle / Offline.
 - **Idle detector:** polls `GetLastInputInfo` every 15 s and sends `setIdle` only
   on a state change, using `idle_after_minutes` from the config.
 - **Single instance:** Tauri `single-instance` plugin (focuses the existing window),
   in addition to the daemon's lock file.
-- **Relay:** line-framed; lines over 1 MB are dropped and logged. Webview commands
-  map one-to-one to daemon methods except `setIdle`.
+- **Relay:** line-framed; lines over 1 MB are dropped. A single `daemon_request`
+  command forwards an allow-listed set of methods; `setIdle` and `shutdown` are
+  reserved for the shell. Request parameters (which may contain an API key) are
+  never logged.
 
 ## UI
 
