@@ -2,6 +2,7 @@ export * from './budget.js';
 export * from './commands.js';
 export * from './config.js';
 export * from './coordinator-client.js';
+export * from './daemon/daemon.js';
 export * from './daemon/protocol.js';
 export * from './db.js';
 export * from './lock.js';
