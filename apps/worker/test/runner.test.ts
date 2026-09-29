@@ -517,6 +517,29 @@ describe('idle-only scheduling', () => {
     expect(coordinator.state.results).toHaveLength(1);
     expect(coordinator.state.queue).toHaveLength(1);
   });
+
+  it('warns once when a reloaded config switches to idle_only with no desktop idle source', async () => {
+    const local = new FakeProvider('ollama', 'local');
+    const runnerRef: { current?: WorkerRunner } = {};
+    let toggled = false;
+    const { runner, log } = await makeRunner({
+      local,
+      onSleep: async (_ms, file) => {
+        if (!toggled) {
+          toggled = true;
+          const c = await loadConfig(file);
+          c.schedule.mode = 'idle_only';
+          await saveConfig(file, c);
+        } else {
+          runnerRef.current?.requestStop();
+        }
+      },
+    });
+    runnerRef.current = runner;
+    await runner.run();
+    const warnings = log.text().match(/idle_only needs the desktop app/g) ?? [];
+    expect(warnings).toHaveLength(1);
+  });
 });
 
 describe('runner snapshot', () => {
@@ -547,11 +570,12 @@ describe('runner snapshot', () => {
       },
     });
     expect(runner.snapshot().current).toBeUndefined();
-    expect(changes).toBeGreaterThanOrEqual(3);
+    expect(changes).toBe(3);
   });
 
   it('goes offline with a readable error when the coordinator is unreachable', async () => {
-    const stop: { fn?: () => void } = {};
+    const runnerRef: { current?: WorkerRunner } = {};
+    let snap: RunnerSnapshot | undefined;
     const local = new FakeProvider('ollama', 'local');
     const { runner } = await makeRunner({
       local,
@@ -559,13 +583,105 @@ describe('runner snapshot', () => {
         if (input.endsWith('/tasks/lease')) throw new TypeError('fetch failed');
         return fetch(input, init);
       },
-      onSleep: async () => stop.fn?.(),
+      onSleep: async () => {
+        if (snap === undefined) snap = runnerRef.current?.snapshot();
+        runnerRef.current?.requestStop();
+      },
     });
-    stop.fn = () => runner.requestStop();
+    runnerRef.current = runner;
     await runner.run();
-    expect(runner.snapshot()).toEqual({
+    expect(snap).toEqual({
       connection: 'offline',
       last_error: 'coordinator unreachable (TypeError)',
+    });
+  });
+
+  it('recovers the connection once a lease succeeds again', async () => {
+    coordinator.state.queue.push(leasedTask(1));
+    const local = new FakeProvider('ollama', 'local');
+    let leaseFailed = false;
+    const { runner } = await makeRunner({
+      local,
+      fetch: async (input, init) => {
+        if (input.endsWith('/tasks/lease') && !leaseFailed) {
+          leaseFailed = true;
+          throw new TypeError('fetch failed');
+        }
+        return fetch(input, init);
+      },
+    });
+    await runner.run({ maxTasks: 1 });
+    expect(runner.snapshot()).toEqual({ connection: 'connected' });
+  });
+
+  it('a heartbeat clears an offline state left by a failed lease, even while paused', async () => {
+    const local = new FakeProvider('ollama', 'local');
+    let leaseFailed = false;
+    const runnerRef: { current?: WorkerRunner } = {};
+    const { runner } = await makeRunner({
+      local,
+      fetch: async (input, init) => {
+        if (input.endsWith('/tasks/lease') && !leaseFailed) {
+          leaseFailed = true;
+          throw new TypeError('fetch failed');
+        }
+        return fetch(input, init);
+      },
+      onSleep: async (_ms, file) => {
+        const c = await loadConfig(file);
+        if (c.schedule.mode === 'paused') {
+          runnerRef.current?.requestStop();
+        } else {
+          c.schedule.mode = 'paused';
+          await saveConfig(file, c);
+        }
+      },
+    });
+    runnerRef.current = runner;
+    await runner.run();
+    expect(runner.snapshot()).toEqual({ connection: 'connected' });
+  });
+
+  it('keeps processing tasks even if onChange throws', async () => {
+    coordinator.state.queue.push(leasedTask(1));
+    const local = new FakeProvider('ollama', 'local');
+    const { runner } = await makeRunner({
+      local,
+      onChange: () => {
+        throw new Error('listener exploded');
+      },
+    });
+    await runner.run({ maxTasks: 1 });
+    expect(coordinator.state.results).toHaveLength(1);
+  });
+
+  it('keeps the connection when the coordinator reaches but refuses the lease', async () => {
+    const local = new FakeProvider('ollama', 'local');
+    let responded429 = false;
+    let snap: RunnerSnapshot | undefined;
+    const runnerRef: { current?: WorkerRunner } = {};
+    const { runner } = await makeRunner({
+      local,
+      fetch: async (input, init) => {
+        if (input.endsWith('/tasks/lease') && !responded429) {
+          responded429 = true;
+          return new Response(
+            JSON.stringify({ error: { code: 'rate_limited', message: 'slow down' } }),
+            { status: 429, headers: { 'content-type': 'application/json' } },
+          );
+        }
+        return fetch(input, init);
+      },
+      onSleep: async () => {
+        if (snap === undefined) snap = runnerRef.current?.snapshot();
+        runnerRef.current?.requestStop();
+      },
+    });
+    runnerRef.current = runner;
+    await runner.run();
+    expect(snap).toEqual({
+      connection: 'connected',
+      last_error: expect.stringContaining('slow down'),
     });
   });
 });

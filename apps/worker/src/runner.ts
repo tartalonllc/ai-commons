@@ -100,6 +100,8 @@ export class WorkerRunner {
   private connection: ConnectionState = 'connecting';
   private lastError: string | undefined;
   private currentTask: { project_id: string; task_id: string } | undefined;
+  private lastScheduleMode: WorkerConfig['schedule']['mode'] | undefined;
+  private idleOnlyWarned = false;
 
   constructor(private readonly deps: RunnerDeps) {
     this.sleep = deps.sleep ?? abortableSleep;
@@ -305,11 +307,21 @@ export class WorkerRunner {
 
   /** Whether the schedule allows taking new work right now. A running task is never interrupted. */
   private mayLease(): boolean {
-    switch (this.config.schedule.mode) {
+    const mode = this.config.schedule.mode;
+    if (mode !== this.lastScheduleMode) {
+      this.lastScheduleMode = mode;
+      this.idleOnlyWarned = false;
+    }
+    switch (mode) {
       case 'active':
         return true;
       case 'idle_only':
-        return this.deps.isIdle?.() ?? false;
+        if (this.deps.isIdle) return this.deps.isIdle();
+        if (!this.idleOnlyWarned) {
+          this.idleOnlyWarned = true;
+          this.deps.logger.warn('idle_only needs the desktop app; not leasing');
+        }
+        return false;
       case 'paused':
         return false;
     }
@@ -321,7 +333,19 @@ export class WorkerRunner {
   }
 
   private changed(): void {
-    this.deps.onChange?.();
+    try {
+      this.deps.onChange?.();
+    } catch (error) {
+      this.deps.logger.warn(
+        { err: error instanceof Error ? error.message : String(error) },
+        'status listener failed',
+      );
+    }
+  }
+
+  private scrubError(error: unknown): string {
+    const text = error instanceof Error ? error.message : String(error);
+    return scrubSecrets(text, this.knownSecrets());
   }
 
   private markConnected(): void {
@@ -332,10 +356,24 @@ export class WorkerRunner {
   }
 
   private markOffline(error: unknown): void {
+    const scrubbed = this.scrubError(error);
+    if (this.connection === 'offline' && this.lastError === scrubbed) return;
     this.connection = 'offline';
-    const text = error instanceof Error ? error.message : String(error);
-    this.lastError = scrubSecrets(text, this.knownSecrets());
+    this.lastError = scrubbed;
     this.changed();
+  }
+
+  /** The coordinator was reached but refused the request; connection stays up. */
+  private noteCoordinatorError(error: CoordinatorError): void {
+    const scrubbed = this.scrubError(error);
+    if (this.lastError === scrubbed) return;
+    this.lastError = scrubbed;
+    this.changed();
+  }
+
+  /** True only for failures where the coordinator itself could not be reached. */
+  private isTransportFailure(error: unknown): boolean {
+    return !(error instanceof CoordinatorError) || error.code === 'network' || error.status >= 500;
   }
 
   snapshot(): RunnerSnapshot {
@@ -364,8 +402,10 @@ export class WorkerRunner {
         providers: this.providers.map((p) => p.provider.id),
         current_tasks: this.busy ? 1 : 0,
       });
+      this.markConnected();
     } catch (error) {
       this.deps.logger.warn({ err: (error as Error).message }, 'heartbeat failed');
+      this.markOffline(error);
     }
   }
 
@@ -420,7 +460,11 @@ export class WorkerRunner {
           backoff = 1_000;
           this.markConnected();
         } catch (error) {
-          this.markOffline(error);
+          if (this.isTransportFailure(error)) {
+            this.markOffline(error);
+          } else if (error instanceof CoordinatorError) {
+            this.noteCoordinatorError(error);
+          }
           const retryAfter = error instanceof CoordinatorError ? error.retryAfterMs : undefined;
           logger.warn({ err: (error as Error).message }, 'lease request failed');
           await this.idle(retryAfter ?? backoff);
