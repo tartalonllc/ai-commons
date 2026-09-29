@@ -18,6 +18,9 @@ export const ScheduleMode = Type.Union([
 ]);
 export type ScheduleMode = Static<typeof ScheduleMode>;
 
+/** Minutes without keyboard/mouse input before the desktop app treats the machine as idle. */
+export const DEFAULT_IDLE_AFTER_MINUTES = 5;
+
 /** Non-secret provider settings. API keys live only in the OS keyring. */
 export const ProviderConfig = Type.Object(
   {
@@ -69,7 +72,14 @@ export const WorkerConfig = Type.Object(
       },
       { additionalProperties: false },
     ),
-    schedule: Type.Object({ mode: ScheduleMode }, { additionalProperties: false }),
+    schedule: Type.Object(
+      {
+        mode: ScheduleMode,
+        /** Used by the desktop app's idle detector; see DEFAULT_IDLE_AFTER_MINUTES. */
+        idle_after_minutes: Type.Optional(Type.Integer({ minimum: 1, maximum: 240 })),
+      },
+      { additionalProperties: false },
+    ),
     projects: Type.Object(
       {
         categories: Type.Union([
