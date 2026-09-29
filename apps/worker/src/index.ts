@@ -3,6 +3,7 @@ export * from './commands.js';
 export * from './config.js';
 export * from './coordinator-client.js';
 export * from './db.js';
+export * from './lock.js';
 export * from './logger.js';
 export * from './paths.js';
 export * from './pipeline.js';

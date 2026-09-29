@@ -11,6 +11,7 @@ import {
 } from './config.js';
 import { CoordinatorClient, type FetchFn } from './coordinator-client.js';
 import { WorkerDatabase } from './db.js';
+import { acquireInstanceLock } from './lock.js';
 import { createFileAndStderrLogger, type Logger } from './logger.js';
 import type { WorkerPaths } from './paths.js';
 import { builtinProviders } from './providers/builtin.js';
@@ -471,37 +472,42 @@ export async function runCli(argv: string[], ctx: CliContext): Promise<number> {
         });
         const maxTasks = numberFlag('max-tasks', values['max-tasks']);
         const config = await loadConfig(paths.configFile);
-        const logger = ctx.logger ?? createFileAndStderrLogger(config.log_level, paths.logFile);
-        const db = new WorkerDatabase(paths.databaseFile);
-        const runner = new WorkerRunner({
-          db,
-          secrets: secrets(),
-          registry,
-          logger,
-          loadConfig: () => loadConfig(paths.configFile),
-          saveConfig: (c) => saveConfig(paths.configFile, c),
-          ...(ctx.fetch ? { fetch: ctx.fetch } : {}),
-        });
-        const install =
-          ctx.onSignal ??
-          ((handler: () => void) => {
-            process.on('SIGINT', handler);
-            process.on('SIGTERM', handler);
-          });
-        install(() => {
-          const phase = runner.requestStop();
-          io.err(
-            phase === 'draining'
-              ? 'Finishing the current task before exiting (press Ctrl+C again to cancel it)...'
-              : 'Cancelling the current task...',
-          );
-        });
+        const lock = acquireInstanceLock(paths.dataDir);
         try {
-          await runner.init();
-          io.out(`Contributing as ${runner.workerId ?? 'unknown'}. Press Ctrl+C to stop.`);
-          await runner.run(maxTasks === undefined ? {} : { maxTasks });
+          const logger = ctx.logger ?? createFileAndStderrLogger(config.log_level, paths.logFile);
+          const db = new WorkerDatabase(paths.databaseFile);
+          const runner = new WorkerRunner({
+            db,
+            secrets: secrets(),
+            registry,
+            logger,
+            loadConfig: () => loadConfig(paths.configFile),
+            saveConfig: (c) => saveConfig(paths.configFile, c),
+            ...(ctx.fetch ? { fetch: ctx.fetch } : {}),
+          });
+          const install =
+            ctx.onSignal ??
+            ((handler: () => void) => {
+              process.on('SIGINT', handler);
+              process.on('SIGTERM', handler);
+            });
+          install(() => {
+            const phase = runner.requestStop();
+            io.err(
+              phase === 'draining'
+                ? 'Finishing the current task before exiting (press Ctrl+C again to cancel it)...'
+                : 'Cancelling the current task...',
+            );
+          });
+          try {
+            await runner.init();
+            io.out(`Contributing as ${runner.workerId ?? 'unknown'}. Press Ctrl+C to stop.`);
+            await runner.run(maxTasks === undefined ? {} : { maxTasks });
+          } finally {
+            db.close();
+          }
         } finally {
-          db.close();
+          lock.release();
         }
         return 0;
       }

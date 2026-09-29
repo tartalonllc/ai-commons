@@ -5,6 +5,7 @@ import { PassThrough, Readable } from 'node:stream';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { runCli, type CliContext } from '../src/commands.js';
 import { loadConfig } from '../src/config.js';
+import { acquireInstanceLock } from '../src/lock.js';
 import { MemorySecretStore, secretAccounts } from '../src/secrets.js';
 import { captureLogger, FakeCoordinator, FakeProvider, leasedTask } from './helpers.js';
 import { ProviderRegistry } from '../src/providers/registry.js';
@@ -154,6 +155,17 @@ describe('aicommons CLI', () => {
       expect(usage.out.join('\n')).toMatch(/Tasks submitted\s+1/);
     } finally {
       await coordinator.stop();
+    }
+  });
+
+  it('refuses to start while another worker holds the lock', async () => {
+    const held = acquireInstanceLock(dir);
+    try {
+      const { context, err } = ctx();
+      expect(await runCli(['start', '--max-tasks', '1'], context)).toBe(1);
+      expect(err.join('\n')).toMatch(/already running/);
+    } finally {
+      held.release();
     }
   });
 });
