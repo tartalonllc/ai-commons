@@ -10,6 +10,7 @@ export default tseslint.config(
       '**/.turbo/**',
       '**/coverage/**',
       '.claude/**',
+      '**/src-tauri/**',
     ],
   },
   js.configs.recommended,
