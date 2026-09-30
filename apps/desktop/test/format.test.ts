@@ -9,8 +9,34 @@ describe('format', () => {
     expect(fmtUsd(5)).toBe('$5.00');
   });
 
+  it('formats negative amounts with a leading sign', () => {
+    expect(fmtUsd(-5)).toBe('-$5.00');
+  });
+
+  it('shows a floor for amounts below one hundredth of a cent', () => {
+    expect(fmtUsd(0.00001)).toBe('<$0.0001');
+  });
+
+  it('groups large amounts with two decimals', () => {
+    expect(fmtUsd(12345.678)).toBe('$12,345.68');
+  });
+
+  it('rounds up to the cent just below the 4-decimal threshold', () => {
+    expect(fmtUsd(0.00999)).toBe('$0.01');
+  });
+
+  it('returns an em dash for non-finite amounts', () => {
+    expect(fmtUsd(NaN)).toBe('—');
+    expect(fmtUsd(Infinity)).toBe('—');
+    expect(fmtUsd(-Infinity)).toBe('—');
+  });
+
   it('groups integers', () => {
     expect(fmtInt(318_481)).toBe('318,481');
+  });
+
+  it('returns an em dash for a non-finite integer', () => {
+    expect(fmtInt(NaN)).toBe('—');
   });
 
   it('turns any rejection into readable text', () => {

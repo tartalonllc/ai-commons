@@ -1,3 +1,5 @@
+// Payloads come from the local shell and daemon (trusted peers, same version);
+// they are type-asserted, not validated.
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import type { DaemonStatus, ProbeResult, ScheduleMode, WorkerConfig } from '@ai-commons/worker';

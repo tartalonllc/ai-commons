@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { replaceContent } from '../src/dom.js';
 import { connectionLabel, renderStatus } from '../src/status-view.js';
 import { $, idleStatus, status, text } from './fixtures.js';
 
@@ -28,6 +29,17 @@ describe('renderStatus', () => {
     expect(t).toContain('Current task—');
   });
 
+  it('falls back to project_id when project_name is missing', () => {
+    const t = text(
+      renderStatus(
+        status({ current: { project_id: 'proj-only', task_id: 'task_1' } }),
+        running,
+        noop,
+      ),
+    );
+    expect(t).toContain('Current projectproj-only');
+  });
+
   it('turns the spend meter amber at 80% of the limit', () => {
     const el = renderStatus(
       status({ today: { ...status().today, api_cost_usd: 0.21 } }),
@@ -39,9 +51,44 @@ describe('renderStatus', () => {
     expect(daily.getAttribute('aria-valuenow')).toBe('84');
   });
 
+  it('has no warn or danger class below 80%', () => {
+    const el = renderStatus(
+      status({ today: { ...status().today, api_cost_usd: 0.05 } }),
+      running,
+      noop,
+    );
+    const daily = $(el, '[role="meter"][aria-label="Daily API limit"]');
+    expect(daily.classList.contains('warn')).toBe(false);
+    expect(daily.classList.contains('danger')).toBe(false);
+  });
+
+  it('clamps the meter and turns it red at or above 100%', () => {
+    const el = renderStatus(
+      status({ today: { ...status().today, api_cost_usd: 5 } }),
+      running,
+      noop,
+    );
+    const daily = $(el, '[role="meter"][aria-label="Daily API limit"]');
+    expect(daily.classList.contains('danger')).toBe(true);
+    expect(daily.getAttribute('aria-valuenow')).toBe('100');
+  });
+
+  it('describes the meter value for screen readers', () => {
+    const el = renderStatus(status(), running, noop);
+    const daily = $(el, '[role="meter"][aria-label="Daily API limit"]');
+    expect(daily.getAttribute('aria-valuetext')).toBe('$0.14 of $0.25');
+  });
+
   it('explains a $0 limit instead of drawing a meter', () => {
     const t = text(
       renderStatus(status({ limits: { daily_usd: 0, monthly_usd: 0 } }), running, noop),
+    );
+    expect(t).toContain('No paid calls ($0 limit)');
+  });
+
+  it('treats a non-finite limit as no paid calls', () => {
+    const t = text(
+      renderStatus(status({ limits: { daily_usd: Infinity, monthly_usd: NaN } }), running, noop),
     );
     expect(t).toContain('No paid calls ($0 limit)');
   });
@@ -66,10 +113,50 @@ describe('renderStatus', () => {
     expect(el.querySelector('img')).toBeNull();
   });
 
+  it('never turns injected text into elements anywhere on the screen', () => {
+    const payload = '<img src=x onerror=alert(1)>';
+    const providers = status().providers.map((p) => ({ ...p, display_name: payload }));
+    const el = renderStatus(
+      status({
+        current: { project_id: 'p', project_name: payload, task_id: 't' },
+        providers,
+      }),
+      { state: 'restarting', message: payload },
+      noop,
+      payload,
+    );
+    expect(el.querySelector('img')).toBeNull();
+    const t = text(el);
+    expect(t).toContain(payload);
+  });
+
   it('offers Resume when paused', () => {
     const el = renderStatus(status({ mode: 'paused' }), running, noop);
     expect(text(el)).toContain('Paused');
     expect($(el, '[data-action="toggle-pause"]').textContent).toBe('Resume contributions');
+  });
+
+  it('shows a restarting banner', () => {
+    const el = renderStatus(status(), { state: 'restarting' }, noop);
+    expect(text(el)).toContain('Restarting the worker…');
+  });
+
+  it('shows a custom restarting message when given', () => {
+    const el = renderStatus(status(), { state: 'restarting', message: 'retry 2/5' }, noop);
+    expect(text(el)).toContain('retry 2/5');
+  });
+
+  it('lets a stopped or restarting banner take priority over last_error', () => {
+    const stopped = renderStatus(
+      status({ last_error: 'boom' }),
+      { state: 'stopped', message: 'exit 1' },
+      noop,
+    );
+    expect(text(stopped)).not.toContain('boom');
+    expect(text(stopped)).toContain('Worker stopped: exit 1');
+
+    const restarting = renderStatus(status({ last_error: 'boom' }), { state: 'restarting' }, noop);
+    expect(text(restarting)).not.toContain('boom');
   });
 
   it('calls the handlers', () => {
@@ -91,6 +178,23 @@ describe('renderStatus', () => {
       'The worker is not running',
     );
   });
+
+  it('keeps focus on the toggle button across a live refresh', () => {
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    try {
+      replaceContent(container, renderStatus(status(), running, noop));
+      const toggle = $(container, '[data-action="toggle-pause"]');
+      toggle.focus();
+      expect(document.activeElement).toBe(toggle);
+
+      replaceContent(container, renderStatus(status({ mode: 'paused' }), running, noop));
+      const newToggle = $(container, '[data-action="toggle-pause"]');
+      expect(document.activeElement).toBe(newToggle);
+    } finally {
+      document.body.removeChild(container);
+    }
+  });
 });
 
 describe('connectionLabel', () => {
@@ -101,5 +205,11 @@ describe('connectionLabel', () => {
       'Waiting for idle',
     );
     expect(connectionLabel(status({ mode: 'idle_only', idle: true })).text).toBe('Connected');
+  });
+
+  it('covers offline, paused and active connected states', () => {
+    expect(connectionLabel(status({ connection: 'offline' })).text).toBe('Offline');
+    expect(connectionLabel(status({ mode: 'paused' })).text).toBe('Paused');
+    expect(connectionLabel(status()).text).toBe('Connected');
   });
 });

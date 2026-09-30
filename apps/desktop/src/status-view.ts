@@ -34,25 +34,31 @@ function button(
   onClick: () => void,
   cls = 'secondary',
 ): HTMLButtonElement {
-  const el = h('button', { type: 'button', class: cls, 'data-action': action }, label);
+  const el = h(
+    'button',
+    { type: 'button', class: cls, 'data-action': action, 'data-key': action },
+    label,
+  );
   el.addEventListener('click', onClick);
   return el;
 }
 
 function meter(label: string, spent: number, limit: number): HTMLElement {
-  if (limit <= 0) return row(label, 'No paid calls ($0 limit)');
-  const pct = Math.min(100, (spent / limit) * 100);
+  if (!Number.isFinite(limit) || limit <= 0) return row(label, 'No paid calls ($0 limit)');
+  const pct = Math.max(0, Math.min(100, (spent / limit) * 100));
   const fill = h('span', { class: 'fill' });
   fill.style.width = `${pct}%`;
+  const cls = pct >= 100 ? 'meter danger' : pct >= 80 ? 'meter warn' : 'meter';
   const bar = h(
     'div',
     {
-      class: pct >= 80 ? 'meter warn' : 'meter',
+      class: cls,
       role: 'meter',
       'aria-label': label,
       'aria-valuemin': 0,
       'aria-valuemax': 100,
       'aria-valuenow': Math.round(pct),
+      'aria-valuetext': `${fmtUsd(spent)} of ${fmtUsd(limit)}`,
     },
     fill,
   );

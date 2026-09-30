@@ -7,14 +7,15 @@
   --accent: #0f766e;
   --accent-strong: #0b5c56;
   --track: #e4e9e7;
-  --ok: #15803d;
+  --ok: #166534;
   --ok-weak: #dcf3e3;
-  --warn: #a16207;
+  --warn: #92400e;
   --warn-weak: #fbf0d4;
   --danger: #b42318;
   --danger-weak: #fde8e6;
   --neutral-weak: #eceff0;
   --focus: #2563eb;
+  --on-accent: #ffffff;
   --radius: 10px;
   color-scheme: light;
 }
@@ -37,6 +38,7 @@
     --danger-weak: #3d1a18;
     --neutral-weak: #242d2a;
     --focus: #93c5fd;
+    --on-accent: #042f2e;
     color-scheme: dark;
   }
 }
@@ -138,6 +140,7 @@ main {
 }
 
 .row .label {
+  flex: none;
   color: var(--muted);
 }
 
@@ -207,6 +210,9 @@ main {
 .meter.warn .fill {
   background: var(--warn);
 }
+.meter.danger .fill {
+  background: var(--danger);
+}
 
 button.primary,
 button.secondary {
@@ -218,7 +224,7 @@ button.secondary {
 button.primary {
   border: 0;
   background: var(--accent);
-  color: #fff;
+  color: var(--on-accent);
   font-weight: 600;
 }
 button.secondary {
