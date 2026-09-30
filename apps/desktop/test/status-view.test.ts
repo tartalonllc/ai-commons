@@ -151,6 +151,20 @@ describe('renderStatus', () => {
     expect(text(el)).toContain('Restarting the worker…');
   });
 
+  it('shows a stopping banner without a Restart button', () => {
+    const el = renderStatus(
+      status({ last_error: 'boom' }),
+      { state: 'stopping', message: 'Finishing the current task…' },
+      noop,
+    );
+    const b = $(el, '.banner');
+    expect(b.classList.contains('warn')).toBe(true);
+    expect(b.getAttribute('role')).toBe('status');
+    expect(text(el)).toContain('Finishing the current task…');
+    expect(text(el)).not.toContain('boom');
+    expect(el.querySelector('[data-action="restart"]')).toBeNull();
+  });
+
   it('shows a custom restarting message when given', () => {
     const el = renderStatus(status(), { state: 'restarting', message: 'retry 2/5' }, noop);
     expect(text(el)).toContain('retry 2/5');

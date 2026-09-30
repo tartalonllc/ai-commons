@@ -29,9 +29,12 @@ const daemon = new WorkerDaemon({
   input: process.stdin,
   output: process.stdout,
 });
-// On Windows SIGTERM cannot be delivered and SIGINT only comes from a
-// console; the desktop shell stops the daemon with a `shutdown` request.
-for (const signal of ['SIGINT', 'SIGTERM'] as const) {
+// The desktop shell normally stops the daemon with a `shutdown` request. On
+// Windows SIGTERM cannot be delivered and SIGINT only comes from a console,
+// but node maps the hidden console's close, logoff and shutdown events to
+// SIGHUP, so a user logging off still drains the current task (Windows allows
+// only a few seconds before it terminates the process).
+for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) {
   process.on(signal, () => void daemon.shutdown());
 }
 await daemon.start();

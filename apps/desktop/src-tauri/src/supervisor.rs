@@ -76,6 +76,19 @@ pub fn tooltip(connection: &str, mode: &str, idle: bool) -> String {
     format!("AI Commons — {state}")
 }
 
+pub const STOPPING_MESSAGE: &str = "Finishing the current task…";
+pub const STOPPING_TOOLTIP: &str = "AI Commons — Stopping";
+
+/// The tray tooltip for a status event; once quitting it stays on "Stopping",
+/// even though the draining daemon keeps sending status.
+pub fn tray_tooltip(quitting: bool, connection: &str, mode: &str, idle: bool) -> String {
+    if quitting {
+        STOPPING_TOOLTIP.to_string()
+    } else {
+        tooltip(connection, mode, idle)
+    }
+}
+
 fn exit_code(code: Option<i32>) -> String {
     code.map_or_else(|| "none".to_string(), |c| c.to_string())
 }
@@ -218,8 +231,19 @@ impl Supervisor {
 
     /// Drain (finish the current task) for up to 30 s, then kill. Killing mid-call
     /// is budget-safe: stale reservations are charged in full on the next start.
+    /// Marks the app as quitting. Returns true for the first call only, so
+    /// repeated Quit clicks are ignored.
+    pub fn begin_quit(&self) -> bool {
+        !self.quitting.swap(true, Ordering::SeqCst)
+    }
+
     pub async fn shutdown(&self) {
         self.quitting.store(true, Ordering::SeqCst);
+        self.set_state("stopping", Some(STOPPING_MESSAGE.to_string()));
+        let tray = self.tray.clone();
+        let _ = self.app.run_on_main_thread(move || {
+            let _ = tray.set_tooltip(Some(STOPPING_TOOLTIP));
+        });
         let Some(handle) = self.handle() else { return };
         let _ = tokio::time::timeout(
             Duration::from_secs(5),
@@ -250,7 +274,12 @@ impl Supervisor {
         } else {
             "Pause contributions"
         };
-        let tip = tooltip(connection, &mode, idle);
+        let tip = tray_tooltip(
+            self.quitting.load(Ordering::SeqCst),
+            connection,
+            &mode,
+            idle,
+        );
         let toggle = self.toggle.clone();
         let tray = self.tray.clone();
         // Fire and forget: menu and tray updates belong on the main thread.
@@ -370,6 +399,18 @@ mod tests {
         assert_eq!(
             tooltip("connecting", "active", false),
             "AI Commons — Connecting"
+        );
+    }
+
+    #[test]
+    fn the_tooltip_stays_on_stopping_while_quitting() {
+        assert_eq!(
+            tray_tooltip(true, "connected", "active", false),
+            "AI Commons — Stopping"
+        );
+        assert_eq!(
+            tray_tooltip(false, "connected", "active", false),
+            "AI Commons — Contributing"
         );
     }
 

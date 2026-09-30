@@ -75,6 +75,14 @@ function providerState(p: ProviderStatus): string {
 
 /** The supervisor-level banner, usable before the daemon has sent any status. */
 export function supervisorBanner(sup: SupervisorState, actions: StatusActions): HTMLElement | null {
+  if (sup.state === 'stopping') {
+    // The app is quitting: no Restart, it would be ignored anyway.
+    return h(
+      'div',
+      { class: 'banner warn', role: 'status' },
+      sup.message ?? 'Finishing the current task…',
+    );
+  }
   if (sup.state === 'restarting') {
     return h(
       'div',

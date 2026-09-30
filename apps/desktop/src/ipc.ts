@@ -5,7 +5,7 @@ import { listen } from '@tauri-apps/api/event';
 import type { DaemonStatus, ProbeResult, ScheduleMode, WorkerConfig } from '@ai-commons/worker';
 
 export interface SupervisorState {
-  state: 'running' | 'restarting' | 'stopped';
+  state: 'running' | 'restarting' | 'stopping' | 'stopped';
   message?: string;
 }
 

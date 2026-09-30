@@ -151,6 +151,8 @@ export class DesktopApp {
       this.announce(`Worker stopped: ${message ?? 'unknown error'}`);
     } else if (state === 'restarting') {
       this.announce(message ?? 'Restarting the worker…');
+    } else if (state === 'stopping') {
+      this.announce(message ?? 'Finishing the current task…');
     } else if (
       state === 'running' &&
       (previousState === 'stopped' || previousState === 'restarting')

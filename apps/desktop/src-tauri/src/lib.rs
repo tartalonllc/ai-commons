@@ -137,8 +137,15 @@ pub fn run() {
                         tauri::async_runtime::spawn(async move { supervisor.toggle_pause().await });
                     }
                     "quit" => {
+                        let supervisor = supervisor_of(app);
+                        // Ignore further Quit clicks while the worker drains.
+                        if !supervisor.begin_quit() {
+                            return;
+                        }
+                        if let Some(window) = app.get_webview_window("main") {
+                            let _ = window.hide();
+                        }
                         let app = app.clone();
-                        let supervisor = supervisor_of(&app);
                         tauri::async_runtime::spawn(async move {
                             supervisor.shutdown().await;
                             app.exit(0);

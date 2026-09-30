@@ -279,6 +279,15 @@ describe('DesktopApp', () => {
       expect(live.textContent).toBe('Worker stopped: exit 1');
     });
 
+    it('announces and shows the stopping state while quitting', async () => {
+      const { root, pushSupervisor } = await start();
+      const live = $(root, '[data-live-region]');
+      pushSupervisor({ state: 'stopping', message: 'Finishing the current task…' });
+      expect(text(root)).toContain('Finishing the current task…');
+      expect(live.textContent).toBe('Finishing the current task…');
+      expect(root.querySelector('[data-action="restart"]')).toBeNull();
+    });
+
     it('announces recovery once the worker is running again after stopping', async () => {
       const { pushSupervisor, root } = await start();
       const live = $(root, '[data-live-region]');
