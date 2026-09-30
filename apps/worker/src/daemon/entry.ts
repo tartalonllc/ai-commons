@@ -29,6 +29,8 @@ const daemon = new WorkerDaemon({
   input: process.stdin,
   output: process.stdout,
 });
+// On Windows SIGTERM cannot be delivered and SIGINT only comes from a
+// console; the desktop shell stops the daemon with a `shutdown` request.
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {
   process.on(signal, () => void daemon.shutdown());
 }

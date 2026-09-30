@@ -38,9 +38,12 @@ export function createLogger(level: string, destination?: DestinationStream): Lo
 }
 
 export function createFileAndStderrLogger(level: string, logFile: string): Logger {
+  // Synchronous destinations: without `sync: true`, a fatal error logged
+  // right before process.exit can be lost, and pino's exit-time flush can
+  // throw "sonic boom is not ready yet".
   const streams = pino.multistream([
-    { level: level as Level, stream: pino.destination(2) },
-    { level: level as Level, stream: pino.destination({ dest: logFile, mkdir: true }) },
+    { level: level as Level, stream: pino.destination({ dest: 2, sync: true }) },
+    { level: level as Level, stream: pino.destination({ dest: logFile, mkdir: true, sync: true }) },
   ]);
   return createLogger(level, streams);
 }
