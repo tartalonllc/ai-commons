@@ -314,6 +314,14 @@ mod job {
     pub struct JobObject(usize);
 
     impl JobObject {
+        /// Creates a kill-on-close job and assigns `child` to it.
+        ///
+        /// `std::process::Command` cannot start a process suspended, so anything
+        /// the child spawns between its own start and this assignment is not in
+        /// the job and would escape it. The daemon starts no processes at startup.
+        ///
+        /// Processes killed because the job closed exit with code 0, so an exit
+        /// code alone never tells a clean exit from a job kill.
         pub fn kill_on_close_for(child: &Child) -> Result<Self, String> {
             let job = create()?;
             set_kill_on_close(&job)?;
@@ -511,7 +519,7 @@ setInterval(() => {}, 1_000);
                 let _ = exit_tx.send(code);
             },
         )
-        .unwrap();
+        .expect("node must be on PATH for daemon tests");
         Fixture {
             dir,
             handle,
@@ -609,7 +617,7 @@ setInterval(() => {}, 1_000);
         let mut child = Command::new("node")
             .args(["-e", "setInterval(() => {}, 1000)"])
             .spawn()
-            .unwrap();
+            .expect("node must be on PATH for daemon tests");
         let job = job::JobObject::kill_on_close_for(&child).unwrap();
         assert!(child.try_wait().unwrap().is_none());
         drop(job);
