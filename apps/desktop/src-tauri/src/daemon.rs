@@ -26,6 +26,34 @@ pub(crate) fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
+/// Rewrites a Windows extended-length path (`\\?\C:\...`, `\\?\UNC\srv\share\...`)
+/// into its plain form. Tauri's `resource_dir()` returns the extended form, and
+/// node cannot run an entry script given that way (`EISDIR ... lstat 'C:'`).
+/// Other paths, including extended ones with no plain form such as volume GUID
+/// paths, are returned unchanged.
+pub fn plain_path(p: &Path) -> PathBuf {
+    if !cfg!(windows) {
+        return p.to_path_buf();
+    }
+    let Some(text) = p.to_str() else {
+        return p.to_path_buf();
+    };
+    if let Some(rest) = text.strip_prefix(r"\\?\UNC\") {
+        return PathBuf::from(format!(r"\\{rest}"));
+    }
+    if let Some(rest) = text.strip_prefix(r"\\?\") {
+        let bytes = rest.as_bytes();
+        let is_drive = bytes.len() >= 2
+            && bytes[0].is_ascii_alphabetic()
+            && bytes[1] == b':'
+            && (bytes.len() == 2 || bytes[2] == b'\\');
+        if is_drive {
+            return PathBuf::from(rest);
+        }
+    }
+    p.to_path_buf()
+}
+
 #[derive(Clone, Debug)]
 pub struct DaemonPaths {
     pub node: PathBuf,
@@ -37,8 +65,8 @@ impl DaemonPaths {
     pub fn in_resources(resource_dir: &Path) -> Self {
         let runtime = resource_dir.join("runtime");
         Self {
-            node: runtime.join(if cfg!(windows) { "node.exe" } else { "node" }),
-            script: runtime.join("daemon").join("worker-daemon.mjs"),
+            node: plain_path(&runtime.join(if cfg!(windows) { "node.exe" } else { "node" })),
+            script: plain_path(&runtime.join("daemon").join("worker-daemon.mjs")),
         }
     }
 }
@@ -468,6 +496,50 @@ mod tests {
         ));
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn strips_the_extended_length_prefix_from_drive_paths() {
+        assert_eq!(
+            plain_path(Path::new(r"\\?\C:\a\b")),
+            PathBuf::from(r"C:\a\b")
+        );
+    }
+
+    #[test]
+    fn leaves_plain_paths_unchanged() {
+        for p in [r"C:\a", "app", r"\\srv\share\x"] {
+            assert_eq!(plain_path(Path::new(p)), PathBuf::from(p), "{p}");
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn converts_extended_unc_paths_to_plain_unc() {
+        assert_eq!(
+            plain_path(Path::new(r"\\?\UNC\srv\share\x")),
+            PathBuf::from(r"\\srv\share\x")
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn leaves_other_extended_paths_alone() {
+        // A volume GUID path has no plain form.
+        let volume = r"\\?\Volume{00000000-0000-0000-0000-000000000000}\x";
+        assert_eq!(plain_path(Path::new(volume)), PathBuf::from(volume));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn resolves_plain_runtime_paths_from_an_extended_resource_dir() {
+        let paths = DaemonPaths::in_resources(Path::new(r"\\?\C:\app"));
+        assert_eq!(paths.node, PathBuf::from(r"C:\app\runtime\node.exe"));
+        assert_eq!(
+            paths.script,
+            PathBuf::from(r"C:\app\runtime\daemon\worker-daemon.mjs")
+        );
+    }
+
     const ECHO_SCRIPT: &str = r#"
 import { createInterface } from 'node:readline';
 const send = (m) => process.stdout.write(JSON.stringify(m) + '\n');
@@ -498,20 +570,29 @@ setInterval(() => {}, 1_000);
         }
     }
 
-    /// Needs `node` on PATH (it is on every dev machine for this repo).
-    fn start_echo(name: &str) -> Fixture {
+    fn test_dir(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("aic-daemon-rs-{}-{name}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// Needs `node` on PATH (it is on every dev machine for this repo).
+    fn start_echo(name: &str) -> Fixture {
+        let dir = test_dir(name);
         let script = dir.join("echo.mjs");
         std::fs::write(&script, ECHO_SCRIPT).unwrap();
         let paths = DaemonPaths {
             node: PathBuf::from("node"),
             script,
         };
+        start_with(dir, &paths)
+    }
+
+    fn start_with(dir: PathBuf, paths: &DaemonPaths) -> Fixture {
         let (event_tx, events) = tokio::sync::mpsc::unbounded_channel();
         let (exit_tx, exit) = oneshot::channel();
         let handle = spawn(
-            &paths,
+            paths,
             move |data| {
                 let _ = event_tx.send(data);
             },
@@ -558,6 +639,31 @@ setInterval(() => {}, 1_000);
             .unwrap();
         assert_eq!(code, Some(0));
         assert!(f.handle.has_exited());
+    }
+
+    /// Regression: Tauri's resource_dir() is `\\?\C:\...` on Windows, and node
+    /// cannot run an entry script given in that form (EISDIR on `C:`).
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn runs_the_daemon_from_an_extended_length_resource_dir() {
+        let dir = test_dir("extended");
+        let daemon_dir = dir.join("runtime").join("daemon");
+        std::fs::create_dir_all(&daemon_dir).unwrap();
+        std::fs::write(daemon_dir.join("worker-daemon.mjs"), ECHO_SCRIPT).unwrap();
+        let absolute = std::path::absolute(&dir).unwrap();
+        let extended = PathBuf::from(format!(r"\\?\{}", absolute.display()));
+
+        let mut paths = DaemonPaths::in_resources(&extended);
+        paths.node = PathBuf::from("node");
+        let mut f = start_with(dir, &paths);
+        tokio::time::timeout(Duration::from_secs(10), f.events.recv())
+            .await
+            .expect("the daemon never started")
+            .expect("the daemon exited before sending status");
+        assert_eq!(
+            f.handle.request("echo", json!({ "n": 3 })).await,
+            Ok(json!({ "n": 3 }))
+        );
     }
 
     #[tokio::test]
