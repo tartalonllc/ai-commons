@@ -1,0 +1,23 @@
+{
+  "name": "@ai-commons/desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "AI Commons desktop worker (Tauri shell + web UI).",
+  "license": "Apache-2.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "stage": "pnpm --filter @ai-commons/worker bundle:daemon && node scripts/stage-runtime.ts"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2"
+  },
+  "devDependencies": {
+    "@ai-commons/worker": "workspace:*",
+    "happy-dom": "^20.14.5",
+    "vite": "^8.3.1"
+  }
+}
