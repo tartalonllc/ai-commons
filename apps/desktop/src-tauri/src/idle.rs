@@ -42,6 +42,12 @@ impl IdleTracker {
 }
 
 /// Time since the last keyboard or mouse input in this session, if the OS can tell us.
+///
+/// `GetLastInputInfo` is scoped to the calling process's session, not the whole
+/// machine: a process running in session 0 (a Windows service) never sees real
+/// user input and this will always report as idle. Call this only from the
+/// interactive tray app, which runs in the logged-in user's session, never
+/// from a background service.
 #[cfg(windows)]
 pub fn time_since_last_input() -> Option<Duration> {
     use windows_sys::Win32::System::SystemInformation::GetTickCount;

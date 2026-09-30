@@ -3,5 +3,5 @@
   "identifier": "default",
   "description": "Main window: event listening only. Worker access goes through the app's own commands (daemon_request allow-lists methods).",
   "windows": ["main"],
-  "permissions": ["core:event:default"]
+  "permissions": ["core:event:allow-listen", "core:event:allow-unlisten"]
 }

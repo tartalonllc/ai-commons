@@ -3,6 +3,10 @@
 use std::io::{self, BufRead};
 
 /// Mirrors `DAEMON_MAX_LINE_BYTES` in apps/worker/src/daemon/protocol.ts.
+///
+/// The cap counts the raw bytes before the terminating `\n`, which for CRLF
+/// input includes the trailing `\r`: a line of exactly this many bytes is
+/// still accepted, one more makes it `Oversized`.
 pub const MAX_LINE_BYTES: usize = 1_000_000;
 
 #[derive(Debug, PartialEq, Eq)]
@@ -23,19 +27,29 @@ impl<R: BufRead> LineReader<R> {
         Self { inner, max }
     }
 
+    /// Reads the next frame.
+    ///
+    /// Retries transparently on `io::ErrorKind::Interrupted`. Any other I/O
+    /// error is propagated as-is; the in-progress line's bytes are lost, so
+    /// callers should treat the reader as unusable afterward rather than
+    /// calling `next_frame` again on it.
     pub fn next_frame(&mut self) -> io::Result<Frame> {
         let mut line: Vec<u8> = Vec::new();
         let mut oversized = false;
         loop {
             let (consumed, complete) = {
-                let available = self.inner.fill_buf()?;
+                let available = match self.inner.fill_buf() {
+                    Ok(buf) => buf,
+                    Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+                    Err(e) => return Err(e),
+                };
                 if available.is_empty() {
                     return Ok(if oversized {
                         Frame::Oversized
                     } else if line.is_empty() {
                         Frame::Eof
                     } else {
-                        Frame::Line(decode(&line))
+                        Frame::Line(decode(line))
                     });
                 }
                 let newline = available.iter().position(|&b| b == b'\n');
@@ -58,16 +72,26 @@ impl<R: BufRead> LineReader<R> {
                 return Ok(if oversized {
                     Frame::Oversized
                 } else {
-                    Frame::Line(decode(&line))
+                    Frame::Line(decode(line))
                 });
             }
         }
     }
 }
 
-fn decode(bytes: &[u8]) -> String {
-    let text = String::from_utf8_lossy(bytes);
-    text.strip_suffix('\r').unwrap_or(&text).to_string()
+/// Decodes a line's raw bytes, stripping a trailing `\r` left by CRLF input.
+///
+/// Well-formed UTF-8 (the common case) is decoded in place with no extra
+/// copy; invalid UTF-8 falls back to a lossy conversion, which does copy.
+fn decode(bytes: Vec<u8>) -> String {
+    let mut text = match String::from_utf8(bytes) {
+        Ok(text) => text,
+        Err(err) => String::from_utf8_lossy(err.as_bytes()).into_owned(),
+    };
+    if text.ends_with('\r') {
+        text.pop();
+    }
+    text
 }
 
 #[cfg(test)]
@@ -133,5 +157,31 @@ mod tests {
     #[test]
     fn empty_input_is_eof() {
         assert_eq!(frames("", 10), vec![Frame::Eof]);
+    }
+
+    #[test]
+    fn a_line_of_exactly_max_bytes_split_across_reads_is_a_line() {
+        let inner = BufReader::with_capacity(4, Cursor::new(b"0123456789\n".to_vec()));
+        let mut reader = LineReader::new(inner, 10);
+        assert_eq!(reader.next_frame().unwrap(), line("0123456789"));
+        assert_eq!(reader.next_frame().unwrap(), Frame::Eof);
+    }
+
+    #[test]
+    fn a_line_of_max_plus_one_bytes_split_across_reads_is_oversized() {
+        let inner = BufReader::with_capacity(4, Cursor::new(b"01234567890\n".to_vec()));
+        let mut reader = LineReader::new(inner, 10);
+        assert_eq!(reader.next_frame().unwrap(), Frame::Oversized);
+        assert_eq!(reader.next_frame().unwrap(), Frame::Eof);
+    }
+
+    #[test]
+    fn recovers_after_an_oversized_line_spanning_several_reads() {
+        let inner =
+            BufReader::with_capacity(4, Cursor::new(b"0123456789ABCDEFGHIJ\nok\n".to_vec()));
+        let mut reader = LineReader::new(inner, 10);
+        assert_eq!(reader.next_frame().unwrap(), Frame::Oversized);
+        assert_eq!(reader.next_frame().unwrap(), line("ok"));
+        assert_eq!(reader.next_frame().unwrap(), Frame::Eof);
     }
 }
