@@ -1,4 +1,5 @@
 // apps/desktop/src-tauri/src/lib.rs  (temporary; replaced in Task 18)
+mod daemon;
 mod framing;
 mod idle;
 
