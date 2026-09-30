@@ -45,7 +45,8 @@ function button(
 
 function meter(label: string, spent: number, limit: number): HTMLElement {
   if (!Number.isFinite(limit) || limit <= 0) return row(label, 'No paid calls ($0 limit)');
-  const pct = Math.max(0, Math.min(100, (spent / limit) * 100));
+  const raw = spent / limit;
+  const pct = Number.isFinite(raw) ? Math.max(0, Math.min(100, raw * 100)) : 0;
   const fill = h('span', { class: 'fill' });
   fill.style.width = `${pct}%`;
   const cls = pct >= 100 ? 'meter danger' : pct >= 80 ? 'meter warn' : 'meter';

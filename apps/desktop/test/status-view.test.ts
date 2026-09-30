@@ -86,6 +86,16 @@ describe('renderStatus', () => {
     expect(t).toContain('No paid calls ($0 limit)');
   });
 
+  it('clamps a non-finite spend to zero', () => {
+    const el = renderStatus(
+      status({ today: { ...status().today, api_cost_usd: NaN } }),
+      running,
+      noop,
+    );
+    const daily = $(el, '[role="meter"][aria-label="Daily API limit"]');
+    expect(daily.getAttribute('aria-valuenow')).toBe('0');
+  });
+
   it('treats a non-finite limit as no paid calls', () => {
     const t = text(
       renderStatus(status({ limits: { daily_usd: Infinity, monthly_usd: NaN } }), running, noop),
