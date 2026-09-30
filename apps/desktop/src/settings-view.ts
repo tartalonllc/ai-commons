@@ -1,10 +1,17 @@
-import type { DaemonStatus, ProbeResult, ProviderConfig, WorkerConfig } from '@ai-commons/worker';
+import type {
+  DaemonStatus,
+  ProbeResult,
+  ProviderConfig,
+  ScheduleMode,
+  WorkerConfig,
+} from '@ai-commons/worker';
 import { h, type Attrs } from './dom.js';
 import { errorText, fmtInt } from './format.js';
 import { connectionLabel } from './status-view.js';
 
 const OLLAMA_DEFAULT = 'http://localhost:11434';
 const DEFAULT_IDLE_MINUTES = 5;
+const PROJECT_ID_PATTERN = /^[a-z0-9][a-z0-9-]{1,62}$/;
 
 export const CATEGORIES = [
   ['science', 'Science'],
@@ -23,6 +30,11 @@ export interface SettingsHandlers {
   onSetKey: (provider: string, key: string) => Promise<void>;
   onDeleteKey: (provider: string) => Promise<void>;
   confirm: (message: string) => Promise<boolean>;
+  /**
+   * The daemon's live schedule mode (e.g. a tray Pause), read at save time so an
+   * untouched mode radio never clobbers it. Return undefined when unknown.
+   */
+  currentMode: () => ScheduleMode | undefined;
   /** REMOTE_DISCLOSURE, shown before any remote provider is enabled. */
   disclosure: string;
 }
@@ -53,6 +65,13 @@ function checkedBoxes(form: HTMLFormElement, name: string): HTMLInputElement[] {
 
 function isCategory(value: string): value is Category {
   return CATEGORIES.some(([c]) => c === value);
+}
+
+function modelWithContextWindow(el: HTMLInputElement): Model {
+  const cw = Number(el.dataset.contextWindow);
+  return Number.isInteger(cw) && cw > 0
+    ? { name: el.value, context_window: cw }
+    : { name: el.value };
 }
 
 /** Pure DOM → WorkerConfig. The daemon validates again; this gives friendlier messages. */
@@ -89,9 +108,24 @@ export function readSettingsForm(form: HTMLFormElement, base: WorkerConfig): For
 
   let allowRemote: WorkerConfig['projects']['allow_remote_for_projects'] = 'all';
   if (radio(form, 'remote_scope') !== 'all') {
-    allowRemote = field(form, 'remote_projects')
+    const raw = field(form, 'remote_projects')
       .value.split(/[\s,]+/)
       .filter((id) => id.length > 0);
+    const ids: string[] = [];
+    const seen = new Set<string>();
+    for (const id of raw) {
+      if (seen.has(id)) continue;
+      seen.add(id);
+      ids.push(id);
+    }
+    const bad = ids.find((id) => !PROJECT_ID_PATTERN.test(id));
+    if (bad) {
+      return {
+        ok: false,
+        error: `"${bad}" is not a valid project ID (lowercase letters, numbers and hyphens only).`,
+      };
+    }
+    allowRemote = ids;
   }
 
   const ollamaBase = base.providers.find((p) => p.id === 'ollama');
@@ -101,12 +135,7 @@ export function readSettingsForm(form: HTMLFormElement, base: WorkerConfig): For
     kind: 'local',
     enabled: checked(form, 'ollama.enabled'),
     endpoint: field(form, 'ollama.endpoint').value.trim() || OLLAMA_DEFAULT,
-    models: checkedBoxes(form, 'ollama.model').map((el) => {
-      const cw = Number(el.dataset.contextWindow);
-      return Number.isInteger(cw) && cw > 0
-        ? { name: el.value, context_window: cw }
-        : { name: el.value };
-    }),
+    models: checkedBoxes(form, 'ollama.model').map(modelWithContextWindow),
   };
 
   const openaiBase = base.providers.find((p) => p.id === 'openai');
@@ -125,33 +154,42 @@ export function readSettingsForm(form: HTMLFormElement, base: WorkerConfig): For
     }
     const input = Number(inPrice);
     const output = Number(outPrice);
-    if (priced && (!(input >= 0) || !(output >= 0))) {
-      return { ok: false, error: 'Prices must be zero or positive numbers.' };
+    if (priced && (!(input > 0) || !(output > 0))) {
+      return { ok: false, error: 'Prices must be greater than zero for a paid model.' };
     }
+    // Only models[0] and its pricing entry are driven by the form; any other
+    // configured models and prices (added some other way) survive untouched.
+    const extraModels = (openaiBase?.models ?? []).slice(1);
+    const models = model ? [{ name: model }, ...extraModels] : extraModels;
+    const pricing = priced
+      ? {
+          ...openaiBase?.pricing,
+          [model]: { input_per_mtok: input, output_per_mtok: output },
+        }
+      : openaiBase?.pricing;
     openai = {
       id: 'openai',
       kind: 'remote',
       enabled: openaiEnabled,
-      models: model ? [{ name: model }] : [],
+      models,
       ...(openaiBase?.endpoint === undefined ? {} : { endpoint: openaiBase.endpoint }),
-      ...(priced
-        ? { pricing: { [model]: { input_per_mtok: input, output_per_mtok: output } } }
-        : {}),
+      ...(pricing ? { pricing } : {}),
     };
   }
 
   const others = base.providers.filter((p) => p.id !== 'ollama' && p.id !== 'openai');
-  return {
-    ok: true,
-    config: {
-      ...base,
-      coordinator_url: coordinator,
-      providers: [ollama, ...(openai ? [openai] : []), ...others],
-      limits: { ...base.limits, api: { daily_usd: daily, monthly_usd: monthly } },
-      schedule: { mode, idle_after_minutes: idleAfter },
-      projects: { categories, allow_remote_for_projects: allowRemote },
-    },
+  const config: WorkerConfig = {
+    ...base,
+    coordinator_url: coordinator,
+    providers: [ollama, ...(openai ? [openai] : []), ...others],
+    limits: { ...base.limits, api: { daily_usd: daily, monthly_usd: monthly } },
+    schedule: { mode, idle_after_minutes: idleAfter },
+    projects: { categories, allow_remote_for_projects: allowRemote },
   };
+  // The coordinator assigns worker_id on registration; the daemon restores it
+  // itself when the coordinator URL is unchanged. The settings form never sends it.
+  delete config.worker_id;
+  return { ok: true, config };
 }
 
 // ---- rendering ----
@@ -192,6 +230,17 @@ function setMsg(el: HTMLElement, text: string, tone: Tone = 'neutral'): void {
   el.className = `form-msg ${tone}`;
 }
 
+function dedupeByName(models: readonly Model[]): Model[] {
+  const seen = new Set<string>();
+  const out: Model[] = [];
+  for (const m of models) {
+    if (seen.has(m.name)) continue;
+    seen.add(m.name);
+    out.push(m);
+  }
+  return out;
+}
+
 function modelList(models: Model[], selected: ReadonlySet<string>): HTMLElement {
   if (models.length === 0) {
     return h(
@@ -226,30 +275,39 @@ export function renderSettings(
   handlers: SettingsHandlers,
 ): HTMLFormElement {
   let current = initial;
+  const initialMode = initial.schedule.mode;
   const ollama = initial.providers.find((p) => p.id === 'ollama');
   const openai = initial.providers.find((p) => p.id === 'openai');
   const openaiModel = openai?.models[0]?.name ?? '';
   const price = openaiModel ? openai?.pricing?.[openaiModel] : undefined;
   const allowRemote = initial.projects.allow_remote_for_projects;
   const cats = initial.projects.categories;
-  const mode = initial.schedule.mode;
   const hasKey = status?.providers.find((p) => p.id === 'openai')?.has_key ?? false;
 
-  const probeMsg = h('span', { class: 'form-msg neutral', role: 'status' });
-  const keyMsg = h('span', { class: 'form-msg neutral', role: 'status' });
-  const formMsg = h('span', { class: 'form-msg neutral', role: 'status' });
+  const probeMsg = h('span', { class: 'form-msg neutral', role: 'status', 'data-msg': 'probe' });
+  const keyMsg = h('span', { class: 'form-msg neutral', role: 'status', 'data-msg': 'key' });
+  const formMsg = h('span', { class: 'form-msg neutral', role: 'status', 'data-msg': 'form' });
   const detect = actionButton('Detect models', 'detect');
+  const keyStateId = 'openai-key-state';
+  const keyNoteId = 'openai-key-note';
   const keyState = h(
     'span',
-    { class: 'muted', 'data-live': 'key-state' },
+    { class: 'muted', 'data-live': 'key-state', id: keyStateId },
     hasKey ? 'Key stored ✓' : 'No key stored',
+  );
+  const keyNote = h(
+    'small',
+    { class: 'muted', id: keyNoteId },
+    'Stored in Windows Credential Manager. Never sent to the coordinator.',
   );
   const keyInput = h('input', {
     type: 'password',
-    name: 'openai.key',
-    autocomplete: 'off',
+    autocomplete: 'new-password',
     spellcheck: 'false',
     placeholder: hasKey ? 'Paste a new key to replace it' : 'sk-…',
+    'aria-label': 'OpenAI API key',
+    'aria-describedby': `${keyStateId} ${keyNoteId}`,
+    'data-key-input': true,
   });
   const saveKey = actionButton('Save key', 'save-key');
   const removeKey = actionButton('Remove key', 'remove-key');
@@ -299,11 +357,7 @@ export function renderSettings(
         keyState,
         keyInput,
         h('div', { class: 'actions' }, saveKey, removeKey, keyMsg),
-        h(
-          'small',
-          { class: 'muted' },
-          'Stored in Windows Credential Manager. Never sent to the coordinator.',
-        ),
+        keyNote,
       ),
       labeled('Model', input('openai.model', openaiModel, { placeholder: 'e.g. gpt-4o-mini' })),
       h(
@@ -334,7 +388,12 @@ export function renderSettings(
         choice('radio', 'remote_scope', 'list', 'Only these project IDs', allowRemote !== 'all'),
         h(
           'textarea',
-          { name: 'remote_projects', rows: 2, spellcheck: 'false' },
+          {
+            name: 'remote_projects',
+            rows: 2,
+            spellcheck: 'false',
+            'aria-label': 'Project IDs (comma or space separated)',
+          },
           allowRemote === 'all' ? '' : allowRemote.join(', '),
         ),
       ),
@@ -392,21 +451,26 @@ export function renderSettings(
       'section',
       { class: 'card' },
       h('h2', {}, 'Schedule'),
-      choice('radio', 'mode', 'active', 'Always', mode === 'active'),
-      choice(
-        'radio',
-        'mode',
-        'idle_only',
-        'Only while this computer is idle',
-        mode === 'idle_only',
-      ),
-      choice('radio', 'mode', 'paused', 'Paused', mode === 'paused'),
-      labeled(
-        'Idle after (minutes without keyboard or mouse input)',
-        input(
-          'idle_after_minutes',
-          String(initial.schedule.idle_after_minutes ?? DEFAULT_IDLE_MINUTES),
-          { type: 'number', min: 1, max: 240, step: 1 },
+      h(
+        'fieldset',
+        {},
+        h('legend', {}, 'When to contribute'),
+        choice('radio', 'mode', 'active', 'Always', initialMode === 'active'),
+        choice(
+          'radio',
+          'mode',
+          'idle_only',
+          'Only while this computer is idle',
+          initialMode === 'idle_only',
+        ),
+        choice('radio', 'mode', 'paused', 'Paused', initialMode === 'paused'),
+        labeled(
+          'Idle after (minutes without keyboard or mouse input)',
+          input(
+            'idle_after_minutes',
+            String(initial.schedule.idle_after_minutes ?? DEFAULT_IDLE_MINUTES),
+            { type: 'number', min: 1, max: 240, step: 1 },
+          ),
         ),
       ),
     ),
@@ -414,13 +478,18 @@ export function renderSettings(
       'section',
       { class: 'card' },
       h('h2', {}, 'Projects'),
-      choice('radio', 'categories_scope', 'all', 'All approved projects', cats === 'all'),
-      choice('radio', 'categories_scope', 'selected', 'Selected categories', cats !== 'all'),
       h(
-        'div',
-        { class: 'checklist' },
-        ...CATEGORIES.map(([value, label]) =>
-          choice('checkbox', 'category', value, label, cats !== 'all' && cats.includes(value)),
+        'fieldset',
+        {},
+        h('legend', {}, 'Which projects'),
+        choice('radio', 'categories_scope', 'all', 'All approved projects', cats === 'all'),
+        choice('radio', 'categories_scope', 'selected', 'Selected categories', cats !== 'all'),
+        h(
+          'div',
+          { class: 'checklist' },
+          ...CATEGORIES.map(([value, label]) =>
+            choice('checkbox', 'category', value, label, cats !== 'all' && cats.includes(value)),
+          ),
         ),
       ),
     ),
@@ -438,14 +507,15 @@ export function renderSettings(
           setMsg(probeMsg, result.message ?? 'Ollama is not reachable.', 'danger');
           return;
         }
+        const deduped = dedupeByName(result.models);
         const selected = new Set(checkedBoxes(form, 'ollama.model').map((el) => el.value));
         const known = [...form.querySelectorAll<HTMLInputElement>('input[name="ollama.model"]')]
-          .filter((el) => !result.models.some((m) => m.name === el.value))
-          .map((el) => ({ name: el.value }));
+          .filter((el) => !deduped.some((m) => m.name === el.value))
+          .map(modelWithContextWindow);
         form
           .querySelector('[data-section="ollama-models"]')
-          ?.replaceWith(modelList([...result.models, ...known], selected));
-        setMsg(probeMsg, `Found ${result.models.length} model(s).`, 'ok');
+          ?.replaceWith(modelList([...deduped, ...known], selected));
+        setMsg(probeMsg, `Found ${deduped.length} model(s).`, 'ok');
       } catch (error) {
         setMsg(probeMsg, errorText(error), 'danger');
       } finally {
@@ -490,19 +560,32 @@ export function renderSettings(
   form.addEventListener('submit', (event) => {
     event.preventDefault();
     void (async () => {
+      // Typing a key and hitting Save settings (instead of Save key) must never
+      // silently drop it, and must never leave it sitting in the DOM either.
+      if (keyInput.value.trim() !== '') {
+        keyInput.value = '';
+        setMsg(keyMsg, 'Use Save key to store the API key', 'warn');
+      }
+
       const result = readSettingsForm(form, current);
       if (!result.ok) {
         setMsg(formMsg, result.error, 'danger');
         return;
       }
-      const wasRemote = current.providers.some((p) => p.kind === 'remote' && p.enabled);
-      const nowRemote = result.config.providers.some((p) => p.kind === 'remote' && p.enabled);
-      if (nowRemote && !wasRemote && !(await handlers.confirm(handlers.disclosure))) {
-        setMsg(formMsg, 'Not saved: the paid provider was not confirmed.', 'warn');
-        return;
+      // Don't undo a tray Pause (or other out-of-band mode change): only trust
+      // the radio when the user actually touched it.
+      if (radio(form, 'mode') === initialMode) {
+        result.config.schedule.mode = handlers.currentMode() ?? result.config.schedule.mode;
       }
+
       submitButton.disabled = true;
       try {
+        const wasRemote = current.providers.some((p) => p.kind === 'remote' && p.enabled);
+        const nowRemote = result.config.providers.some((p) => p.kind === 'remote' && p.enabled);
+        if (nowRemote && !wasRemote && !(await handlers.confirm(handlers.disclosure))) {
+          setMsg(formMsg, 'Not saved: the paid provider was not confirmed.', 'warn');
+          return;
+        }
         await handlers.onSave(result.config);
         current = result.config;
         setMsg(formMsg, 'Settings saved.', 'ok');
