@@ -155,6 +155,31 @@ export function validateCoordinatorUrl(raw: string): URL {
   );
 }
 
+/**
+ * Provider endpoints may carry API keys, so a remote (keyed) provider must use
+ * TLS unless it points at this machine.
+ */
+export function validateProviderEndpoint(raw: string, requiresTls: boolean): URL {
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    throw new ConfigError('Provider endpoint must be a valid URL');
+  }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+    throw new ConfigError('Provider endpoint must use http:// or https://');
+  }
+  if (url.username || url.password) {
+    throw new ConfigError('Provider endpoint must not contain credentials');
+  }
+  if (requiresTls && url.protocol !== 'https:' && !LOCAL_HOSTS.has(url.hostname)) {
+    throw new ConfigError(
+      'Remote provider endpoints must use https:// (plain http is allowed only for localhost)',
+    );
+  }
+  return url;
+}
+
 export function validateConfig(input: unknown): WorkerConfig {
   const result = parse(WorkerConfig, input);
   if (!result.ok) {
@@ -168,6 +193,11 @@ export function validateConfig(input: unknown): WorkerConfig {
   }
   const ids = config.providers.map((p) => p.id);
   if (new Set(ids).size !== ids.length) throw new ConfigError('Duplicate provider ids in config');
+  for (const provider of config.providers) {
+    if (provider.endpoint !== undefined) {
+      validateProviderEndpoint(provider.endpoint, provider.kind === 'remote');
+    }
+  }
   return config;
 }
 

@@ -9,6 +9,7 @@ import {
   saveConfig,
   validateConfig,
   validateCoordinatorUrl,
+  validateProviderEndpoint,
 } from '../src/config.js';
 import { CoordinatorClient, CoordinatorError, type FetchFn } from '../src/coordinator-client.js';
 import { scrubSecrets } from '../src/logger.js';
@@ -54,6 +55,36 @@ describe('config', () => {
     );
     expect(validateCoordinatorUrl('http://127.0.0.1:3000').port).toBe('3000');
     expect(validateCoordinatorUrl('http://localhost').hostname).toBe('localhost');
+  });
+
+  it('validates provider endpoints so keys never go to an untrusted host', () => {
+    expect(() => validateProviderEndpoint('not a url', false)).toThrow(ConfigError);
+    expect(() => validateProviderEndpoint('file:///etc/passwd', false)).toThrow(ConfigError);
+    expect(() => validateProviderEndpoint('http://u:p@localhost:11434', false)).toThrow(
+      ConfigError,
+    );
+    expect(() => validateProviderEndpoint('http://example.org', true)).toThrow(ConfigError);
+    expect(validateProviderEndpoint('http://example.org:11434', false).port).toBe('11434');
+    expect(validateProviderEndpoint('http://localhost:1234', true).port).toBe('1234');
+    expect(validateProviderEndpoint('https://api.example.org/v1', true).hostname).toBe(
+      'api.example.org',
+    );
+  });
+
+  it('requires TLS for remote provider endpoints in the config', () => {
+    const remote = (endpoint: string) => ({
+      ...defaultConfig(),
+      providers: [{ id: 'openai', kind: 'remote' as const, enabled: true, models: [], endpoint }],
+    });
+    expect(() => validateConfig(remote('http://example.org'))).toThrow(ConfigError);
+    expect(validateConfig(remote('http://localhost:1234')).providers[0]?.endpoint).toBe(
+      'http://localhost:1234',
+    );
+    const local = defaultConfig();
+    local.providers = [
+      { id: 'ollama', kind: 'local', enabled: true, models: [], endpoint: 'ftp://x' },
+    ];
+    expect(() => validateConfig(local)).toThrow(ConfigError);
   });
 });
 

@@ -9,9 +9,16 @@ import type { DaemonStatus, ProbeResult } from '../src/daemon/protocol.js';
 import { acquireInstanceLock } from '../src/lock.js';
 import type { WorkerPaths } from '../src/paths.js';
 import { abortableSleep } from '../src/pipeline.js';
-import { ProviderRegistry } from '../src/providers/registry.js';
+import { ProviderRegistry, type ProviderFactory } from '../src/providers/registry.js';
 import { MemorySecretStore, secretAccounts } from '../src/secrets.js';
-import { captureLogger, FakeCoordinator, FakeProvider, leasedTask, testConfig } from './helpers.js';
+import {
+  captureLogger,
+  FakeCoordinator,
+  FakeProvider,
+  leasedTask,
+  ok,
+  testConfig,
+} from './helpers.js';
 
 const API_KEY = 'sk-test-DAEMONSECRET1234567890';
 type Message = Record<string, unknown>;
@@ -84,8 +91,15 @@ let dir: string;
 let coordinator: FakeCoordinator;
 let started: Started | undefined;
 
+let openaiFactoryCalls = 0;
+
 async function startDaemon(
-  opts: { configured?: boolean; config?: Partial<WorkerConfig> } = {},
+  opts: {
+    configured?: boolean;
+    config?: Partial<WorkerConfig>;
+    ollamaFactory?: ProviderFactory;
+    openaiFactory?: ProviderFactory;
+  } = {},
 ): Promise<Started> {
   const paths: WorkerPaths = {
     configDir: dir,
@@ -105,14 +119,16 @@ async function startDaemon(
       kind: 'local',
       displayName: 'Ollama (local)',
       requiresKey: false,
-      factory: async () => local,
+      factory: opts.ollamaFactory ?? (async () => local),
     })
     .register({
       id: 'openai',
       kind: 'remote',
       displayName: 'OpenAI API',
       requiresKey: true,
-      factory: async () => {
+      factory: async (cfg, store) => {
+        openaiFactoryCalls++;
+        if (opts.openaiFactory) return opts.openaiFactory(cfg, store);
         throw new Error('invalid key sk-live-abcdefghijklmnop');
       },
     });
@@ -136,6 +152,7 @@ async function startDaemon(
 
 beforeEach(async () => {
   dir = mkdtempSync(join(tmpdir(), 'aic-daemon-'));
+  openaiFactoryCalls = 0;
   coordinator = await new FakeCoordinator().start();
 });
 
@@ -227,6 +244,38 @@ describe('WorkerDaemon', () => {
     expect((await loadConfig(paths.configFile)).schedule.mode).toBe('idle_only');
   });
 
+  it('resume leaves a mode that is not paused unchanged', async () => {
+    const { h, paths } = await startDaemon({ config: { schedule: { mode: 'idle_only' } } });
+    await until(() => h.events().some((e) => e.worker_id === 'worker_test1'));
+    const before = readFileSync(paths.configFile, 'utf8');
+    expect((await h.request('resume')).result).toEqual({ mode: 'idle_only' });
+    expect(readFileSync(paths.configFile, 'utf8')).toBe(before);
+  });
+
+  it('keeps the registered worker_id when saved config omits it', async () => {
+    const { h, paths } = await startDaemon();
+    await until(() => h.events().some((e) => e.connection === 'connected'));
+    expect((await loadConfig(paths.configFile)).worker_id).toBe('worker_test1');
+    expect((await h.request('saveConfig', { config: testConfig(coordinator.url) })).ok).toBe(true);
+    expect((await loadConfig(paths.configFile)).worker_id).toBe('worker_test1');
+  });
+
+  it('does not restart the runner when providers only differ in key order', async () => {
+    const { h } = await startDaemon();
+    await until(() => h.events().some((e) => e.connection === 'connected'));
+    const starts = () =>
+      coordinator.state.registrations +
+      coordinator.state.requests.filter((r) => r.url === '/api/v1/workers/capabilities').length;
+    const before = starts();
+    const reordered = {
+      ...testConfig(coordinator.url),
+      providers: [{ models: [{ name: 'test-model' }], enabled: true, kind: 'local', id: 'ollama' }],
+    };
+    expect((await h.request('saveConfig', { config: reordered })).ok).toBe(true);
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(starts()).toBe(before);
+  });
+
   it('refuses mode changes before setup', async () => {
     const { h } = await startDaemon({ configured: false });
     expect(await h.request('setMode', { mode: 'paused' })).toMatchObject({
@@ -256,6 +305,10 @@ describe('WorkerDaemon', () => {
       ok: false,
       error: { code: 'bad_request' },
     });
+    expect(await h.request('deleteKey', { provider: 'ollama' })).toMatchObject({
+      ok: false,
+      error: { code: 'bad_request' },
+    });
   });
 
   it('probes providers for models and scrubs failures', async () => {
@@ -279,17 +332,95 @@ describe('WorkerDaemon', () => {
     ).toMatchObject({ ok: false, error: { code: 'bad_request' } });
   });
 
-  it('reports offline instead of contributing when another worker holds the lock', async () => {
+  it('refuses to probe a keyed provider over plain http to a remote host', async () => {
+    const { h } = await startDaemon();
+    expect(
+      await h.request('probeProvider', { id: 'openai', endpoint: 'http://example.org' }),
+    ).toMatchObject({ ok: false, error: { code: 'bad_request' } });
+    expect(openaiFactoryCalls).toBe(0);
+  });
+
+  it('scrubs the stored API key from probe failures', async () => {
+    const plainKey = 'plainkey-1234567890abcdef';
+    const { h } = await startDaemon({
+      openaiFactory: async (_cfg, store) => {
+        const key = await store.get(secretAccounts.provider('openai'));
+        throw new Error(`provider rejected ${key ?? 'nothing'}`);
+      },
+    });
+    expect((await h.request('setKey', { provider: 'openai', key: plainKey })).ok).toBe(true);
+    const failed = (await h.request('probeProvider', { id: 'openai' })).result as ProbeResult;
+    expect(failed.ok).toBe(false);
+    expect(failed.message).toContain('[redacted]');
+    expect(h.text()).not.toContain(plainKey);
+  });
+
+  it('stays offline while another worker holds the lock, then takes over', async () => {
     const held = acquireInstanceLock(dir);
+    let released = false;
     try {
       const { h } = await startDaemon();
       const status = await h.status();
       expect(status.connection).toBe('offline');
       expect(status.last_error).toMatch(/already running/);
+      await new Promise((resolve) => setTimeout(resolve, 150));
       expect(coordinator.state.registrations).toBe(0);
-    } finally {
+      expect((await h.request('getStatus')).ok).toBe(true);
+
       held.release();
+      released = true;
+      await until(() => h.events().some((e) => e.connection === 'connected'));
+      expect(coordinator.state.registrations).toBe(1);
+      expect((await h.status()).last_error).toBeUndefined();
+    } finally {
+      if (!released) held.release();
     }
+  });
+
+  it('does not start the runner once shutdown has begun during init', async () => {
+    const gate: { open?: () => void } = {};
+    const opened = new Promise<void>((resolve) => {
+      gate.open = resolve;
+    });
+    let entered = false;
+    const local = new FakeProvider('ollama', 'local');
+    const { h, daemon } = await startDaemon({
+      ollamaFactory: async () => {
+        entered = true;
+        await opened;
+        return local;
+      },
+    });
+    await until(() => entered);
+    expect((await h.request('shutdown')).result).toEqual({ stopping: true });
+    gate.open?.();
+    await daemon.finished();
+    expect(coordinator.state.heartbeats).toHaveLength(0);
+    expect(coordinator.state.requests.some((r) => r.url === '/api/v1/tasks/lease')).toBe(false);
+  });
+
+  it('stdin EOF after a shutdown request still lets the current task finish', async () => {
+    coordinator.state.queue.push(leasedTask(1));
+    const slow = new FakeProvider('ollama', 'local', [
+      async (req) => {
+        await new Promise((resolve) => setTimeout(resolve, 200));
+        return ok({ field: 'biology', confidence: 0.9 })(req);
+      },
+    ]);
+    const { h, daemon } = await startDaemon({ ollamaFactory: async () => slow });
+    await until(() => slow.calls.length === 1);
+    expect((await h.request('shutdown')).result).toEqual({ stopping: true });
+    h.input.end();
+    await daemon.finished();
+    expect(coordinator.state.results).toHaveLength(1);
+    expect(coordinator.state.fails).toHaveLength(0);
+  });
+
+  it('shuts down when stdout fails', async () => {
+    const { h, daemon } = await startDaemon();
+    await until(() => h.events().some((e) => e.connection === 'connected'));
+    h.output.destroy(new Error('EPIPE'));
+    await daemon.finished();
   });
 
   it('drains and finishes on a shutdown request', async () => {

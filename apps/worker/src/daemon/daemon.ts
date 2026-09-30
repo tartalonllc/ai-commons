@@ -1,4 +1,5 @@
 import { createInterface, type Interface } from 'node:readline';
+import { isDeepStrictEqual } from 'node:util';
 import {
   ConfigError,
   configExists,
@@ -7,6 +8,7 @@ import {
   loadConfig,
   saveConfig as writeConfigFile,
   validateConfig,
+  validateProviderEndpoint,
   type ProviderConfig,
   type ScheduleMode,
   type WorkerConfig,
@@ -78,7 +80,7 @@ function errorMessage(error: unknown): string {
 function needsRestart(prev: WorkerConfig, next: WorkerConfig): boolean {
   return (
     prev.coordinator_url !== next.coordinator_url ||
-    JSON.stringify(prev.providers) !== JSON.stringify(next.providers)
+    !isDeepStrictEqual(prev.providers, next.providers)
   );
 }
 
@@ -113,16 +115,8 @@ export class WorkerDaemon {
   constructor(private readonly deps: DaemonDeps) {}
 
   async start(): Promise<void> {
-    const { paths, logger } = this.deps;
-    try {
-      this.lock = (this.deps.acquireLock ?? acquireInstanceLock)(paths.dataDir);
-      this.db = new WorkerDatabase(paths.databaseFile);
-    } catch (error) {
-      this.lock?.release();
-      this.lock = undefined;
-      this.lastError = this.scrub(error);
-      logger.error({ err: this.lastError }, 'worker daemon cannot contribute');
-    }
+    const { paths } = this.deps;
+    this.openStorage();
     try {
       this.configured = await configExists(paths.configFile);
       this.config = await loadConfig(paths.configFile);
@@ -134,7 +128,13 @@ export class WorkerDaemon {
 
     this.lines = createInterface({ input: this.deps.input, crlfDelay: Infinity });
     this.lines.on('line', (line) => void this.handleLine(line));
-    this.lines.on('close', () => void this.shutdown());
+    // EOF only ever drains; cancelling the task in flight takes an explicit second request.
+    this.lines.on('close', () => void this.drain());
+    this.deps.output.on('error', (error: unknown) => {
+      this.closed = true; // nothing more can be written
+      this.deps.logger.error({ err: this.scrub(error) }, 'daemon output failed; shutting down');
+      void this.drain();
+    });
     this.statusTimer = setInterval(() => this.emitStatus(), this.deps.statusIntervalMs ?? 5_000);
     this.statusTimer.unref();
     this.emitStatus();
@@ -143,6 +143,11 @@ export class WorkerDaemon {
 
   finished(): Promise<void> {
     return this.finishedPromise;
+  }
+
+  /** Starts a draining shutdown unless one is already under way; never cancels a task. */
+  private drain(): Promise<void> {
+    return this.stopping ? this.finishedPromise : this.shutdown();
   }
 
   /** First call drains (finishes the current task); a second call cancels it. */
@@ -156,6 +161,7 @@ export class WorkerDaemon {
     clearTimeout(this.retryTimer);
     this.emitStatus();
     await this.enqueue(() => this.stopRunner());
+    await this.configOps;
     this.closed = true;
     this.lines?.close();
     this.db?.close();
@@ -242,12 +248,21 @@ export class WorkerDaemon {
         return this.config;
       case 'saveConfig': {
         const next = validateConfig(request.params.config);
-        await this.writeConfig(() => next);
-        return next;
+        // The settings form may not carry worker_id; losing it would force a re-registration.
+        await this.writeConfig((current) =>
+          current.worker_id !== undefined && next.worker_id === undefined
+            ? { ...next, worker_id: current.worker_id }
+            : next,
+        );
+        return this.config;
       }
       case 'setMode':
         return { mode: await this.setMode(request.params.mode) };
       case 'resume': {
+        // Nothing to resume from: report the current mode and write nothing.
+        if (this.configured && this.config.schedule.mode !== 'paused') {
+          return { mode: this.config.schedule.mode };
+        }
         const stored = this.db?.getSetting(RESUME_MODE_SETTING);
         return { mode: await this.setMode(stored === 'idle_only' ? 'idle_only' : 'active') };
       }
@@ -327,6 +342,9 @@ export class WorkerDaemon {
   }
 
   private async deleteKey(provider: string): Promise<boolean> {
+    if (!this.deps.registry.get(provider)?.requiresKey) {
+      throw new DaemonError('bad_request', `Provider "${provider}" does not use an API key`);
+    }
     const removed = await this.deps.secrets.delete(secretAccounts.provider(provider));
     this.keys.set(provider, false);
     this.afterKeyChange(provider);
@@ -344,14 +362,12 @@ export class WorkerDaemon {
     const registration = this.deps.registry.get(id);
     if (!registration) throw new DaemonError('bad_request', `Unknown provider "${id}"`);
     if (endpoint !== undefined) {
-      let url: URL;
+      // The factory may send the stored API key to this endpoint.
+      const requiresTls = registration.requiresKey || registration.kind === 'remote';
       try {
-        url = new URL(endpoint);
-      } catch {
-        throw new DaemonError('bad_request', 'Endpoint must be a valid URL');
-      }
-      if (url.protocol !== 'http:' && url.protocol !== 'https:') {
-        throw new DaemonError('bad_request', 'Endpoint must use http:// or https://');
+        validateProviderEndpoint(endpoint, requiresTls);
+      } catch (error) {
+        throw new DaemonError('bad_request', errorMessage(error));
       }
     }
     const existing = this.config.providers.find((p) => p.id === id);
@@ -364,11 +380,20 @@ export class WorkerDaemon {
       ...(endpointToUse === undefined ? {} : { endpoint: endpointToUse }),
       ...(existing?.pricing === undefined ? {} : { pricing: existing.pricing }),
     };
+    const known: string[] = [];
     try {
+      if (registration.requiresKey) {
+        const key = await this.deps.secrets.get(secretAccounts.provider(id));
+        if (key !== undefined) known.push(key);
+      }
       const provider = await this.deps.registry.create(cfg, this.deps.secrets);
       const health = await provider.healthCheck();
       if (!health.ok) {
-        return { ok: false, message: this.scrub(health.message ?? 'Not reachable'), models: [] };
+        return {
+          ok: false,
+          message: this.scrub(health.message ?? 'Not reachable', known),
+          models: [],
+        };
       }
       const models = await provider.getModels();
       return {
@@ -380,7 +405,7 @@ export class WorkerDaemon {
         ),
       };
     } catch (error) {
-      return { ok: false, message: this.scrub(error), models: [] };
+      return { ok: false, message: this.scrub(error, known), models: [] };
     }
   }
 
@@ -408,8 +433,39 @@ export class WorkerDaemon {
     return next;
   }
 
+  /**
+   * Takes the instance lock and opens SQLite. On failure (typically another
+   * worker holding the lock) the daemon stays responsive and reports offline;
+   * startRunner retries this on the restart timer.
+   */
+  private openStorage(): boolean {
+    if (this.db) return true;
+    const { paths, logger } = this.deps;
+    try {
+      this.lock = (this.deps.acquireLock ?? acquireInstanceLock)(paths.dataDir);
+      this.db = new WorkerDatabase(paths.databaseFile);
+      return true;
+    } catch (error) {
+      this.lock?.release();
+      this.lock = undefined;
+      this.lastError = this.scrub(error);
+      logger.warn({ err: this.lastError }, 'worker daemon cannot contribute yet; will retry');
+      return false;
+    }
+  }
+
   private async startRunner(): Promise<void> {
-    if (this.stopping || !this.configured || !this.db || this.runner) return;
+    if (this.stopping || this.runner) return;
+    if (!this.db) {
+      if (!this.openStorage()) {
+        this.scheduleRetry();
+        this.emitStatus();
+        return;
+      }
+      this.lastError = undefined;
+      this.emitStatus();
+    }
+    if (!this.configured || !this.db) return;
     clearTimeout(this.retryTimer);
     this.intentionalStop = false;
     const { paths, secrets, registry, logger } = this.deps;
@@ -444,6 +500,11 @@ export class WorkerDaemon {
       logger.warn({ err: this.lastError }, 'worker could not start; will retry');
       this.scheduleRetry();
       this.emitStatus();
+      return;
+    }
+    // Shutdown began while init was in flight: never enter the run loop.
+    if (this.stopping) {
+      this.runner = undefined;
       return;
     }
     this.runLoop = runner
@@ -509,7 +570,7 @@ export class WorkerDaemon {
     this.deps.output.write(`${JSON.stringify(message)}\n`);
   }
 
-  private scrub(error: unknown): string {
-    return scrubSecrets(errorMessage(error)).slice(0, 500);
+  private scrub(error: unknown, knownSecrets: readonly string[] = []): string {
+    return scrubSecrets(errorMessage(error), knownSecrets).slice(0, 500);
   }
 }
