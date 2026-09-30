@@ -1,14 +1,17 @@
 import { h } from './dom.js';
 
+let dialogCount = 0;
+
 /** In-page confirmation; avoids adding the Tauri dialog plugin. */
 export function confirmDialog(message: string): Promise<boolean> {
   return new Promise((resolve) => {
+    const messageId = `confirm-dialog-message-${++dialogCount}`;
     const ok = h('button', { type: 'button', class: 'primary' }, 'I understand, enable it');
     const cancel = h('button', { type: 'button', class: 'secondary' }, 'Cancel');
     const dialog = h(
       'dialog',
-      { class: 'confirm', 'aria-label': 'Confirm paid provider' },
-      h('p', {}, message),
+      { class: 'confirm', 'aria-label': 'Confirm paid provider', 'aria-describedby': messageId },
+      h('p', { id: messageId }, message),
       h('div', { class: 'actions' }, cancel, ok),
     );
     let settled = false;

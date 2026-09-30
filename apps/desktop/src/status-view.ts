@@ -73,7 +73,8 @@ function providerState(p: ProviderStatus): string {
   return 'Enabled';
 }
 
-function banner(s: DaemonStatus, sup: SupervisorState, actions: StatusActions): HTMLElement | null {
+/** The supervisor-level banner, usable before the daemon has sent any status. */
+export function supervisorBanner(sup: SupervisorState, actions: StatusActions): HTMLElement | null {
   if (sup.state === 'restarting') {
     return h(
       'div',
@@ -89,8 +90,35 @@ function banner(s: DaemonStatus, sup: SupervisorState, actions: StatusActions): 
       button('Restart', 'restart', actions.onRestart),
     );
   }
+  return null;
+}
+
+function banner(s: DaemonStatus, sup: SupervisorState, actions: StatusActions): HTMLElement | null {
+  const supBanner = supervisorBanner(sup, actions);
+  if (supBanner) return supBanner;
   if (s.last_error) return h('div', { class: 'banner warn', role: 'status' }, s.last_error);
   return null;
+}
+
+/**
+ * Shown before the first `DaemonStatus` has arrived (e.g. the daemon failed
+ * to start at all). Still surfaces the supervisor banner (with Restart) and
+ * any notice, instead of a bare "Starting the worker…" that hides the reason.
+ */
+export function renderStarting(
+  sup: SupervisorState,
+  actions: StatusActions,
+  notice?: string,
+): HTMLElement {
+  const supBanner = supervisorBanner(sup, actions);
+  const noticeBanner = notice ? h('div', { class: 'banner danger', role: 'alert' }, notice) : null;
+  return h(
+    'div',
+    { class: 'status-view' },
+    supBanner,
+    noticeBanner,
+    supBanner || noticeBanner ? null : h('p', { class: 'muted' }, 'Starting the worker…'),
+  );
 }
 
 export function renderStatus(

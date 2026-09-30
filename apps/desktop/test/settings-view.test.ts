@@ -391,6 +391,21 @@ describe('renderSettings', () => {
     expect(saved[1]?.schedule.mode).toBe('active');
   });
 
+  it('keeps following the live tray mode across repeated saves when the radio is never touched', async () => {
+    // Regression: an earlier fix reset the baseline to the *saved* (already
+    // overridden) mode, which matched the untouched radio only once. On the
+    // second save the baseline no longer matched, so the tray's mode stopped
+    // being applied even though the user never touched the radio.
+    const { form, saved } = mount(config(), { currentMode: () => 'paused' });
+
+    submit(form);
+    await flush();
+    submit(form);
+    await flush();
+
+    expect(saved.map((c) => c.schedule.mode)).toEqual(['paused', 'paused']);
+  });
+
   it('warns instead of silently dropping an unsaved key on Save settings', async () => {
     const { form, saved, keys } = mount();
     $<HTMLInputElement>(form, '[data-key-input]').value = KEY;

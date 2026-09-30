@@ -576,8 +576,15 @@ export function renderSettings(
         return;
       }
       // Don't undo a tray Pause (or other out-of-band mode change): only trust
-      // the radio when the user actually touched it.
-      if (radio(form, 'mode') === initialMode) {
+      // the radio when the user actually touched it. Capture the radio's own
+      // value now (readSettingsForm already read it into result.config, before
+      // any override below), so the baseline always reflects what's actually
+      // checked, not a derived value: otherwise, once the override fires and
+      // the baseline is taken from its result, the *next* untouched save
+      // stops matching the baseline and the override never fires again, even
+      // though the radio is still untouched.
+      const touchedMode = result.config.schedule.mode;
+      if (touchedMode === initialMode) {
         result.config.schedule.mode = handlers.currentMode() ?? result.config.schedule.mode;
       }
 
@@ -591,7 +598,7 @@ export function renderSettings(
         }
         await handlers.onSave(result.config);
         current = result.config;
-        initialMode = result.config.schedule.mode;
+        initialMode = touchedMode;
         setMsg(formMsg, 'Settings saved.', 'ok');
       } catch (error) {
         setMsg(formMsg, errorText(error), 'danger');

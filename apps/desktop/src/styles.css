@@ -84,12 +84,12 @@ body {
   font-size: 16px;
 }
 
-nav[role='tablist'] {
+.app-header nav {
   display: flex;
   gap: 4px;
 }
 
-nav[role='tablist'] button {
+.app-header nav button {
   border: 0;
   background: transparent;
   color: var(--muted);
@@ -99,7 +99,7 @@ nav[role='tablist'] button {
   cursor: pointer;
 }
 
-nav[role='tablist'] button[aria-selected='true'] {
+.app-header nav button[aria-current='page'] {
   background: var(--neutral-weak);
   color: var(--text);
   font-weight: 600;
