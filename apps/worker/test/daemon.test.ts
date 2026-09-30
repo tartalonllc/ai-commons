@@ -4,8 +4,14 @@ import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { loadConfig, saveConfig, type WorkerConfig } from '../src/config.js';
-import { WorkerDaemon } from '../src/daemon/daemon.js';
-import type { DaemonStatus, ProbeResult } from '../src/daemon/protocol.js';
+import { encodeOutbound, WorkerDaemon } from '../src/daemon/daemon.js';
+import {
+  DAEMON_MAX_LINE_BYTES,
+  type DaemonEvent,
+  type DaemonResponse,
+  type DaemonStatus,
+  type ProbeResult,
+} from '../src/daemon/protocol.js';
 import { acquireInstanceLock } from '../src/lock.js';
 import type { WorkerPaths } from '../src/paths.js';
 import { abortableSleep } from '../src/pipeline.js';
@@ -499,5 +505,36 @@ describe('WorkerDaemon', () => {
     const { h, daemon } = await startDaemon();
     h.input.end();
     await daemon.finished();
+  });
+});
+
+describe('encodeOutbound', () => {
+  const huge = 'x'.repeat(DAEMON_MAX_LINE_BYTES);
+
+  it('passes messages within the cap through unchanged', () => {
+    const response: DaemonResponse = { id: 'r1', ok: true, result: { n: 1 } };
+    expect(encodeOutbound(response)).toBe(JSON.stringify(response));
+  });
+
+  it('replaces an oversized response with an internal error for the same id', () => {
+    const line = encodeOutbound({ id: 'r7', ok: true, result: { blob: huge } });
+    expect(line).toBeDefined();
+    expect(JSON.parse(line ?? '')).toEqual({
+      id: 'r7',
+      ok: false,
+      error: { code: 'internal', message: 'Response too large' },
+    });
+  });
+
+  it('counts bytes, not UTF-16 code units', () => {
+    // Each 'é' is 2 bytes in UTF-8, so this fits in code units but not in bytes.
+    const wide = 'é'.repeat(DAEMON_MAX_LINE_BYTES / 2);
+    const line = encodeOutbound({ id: 'r8', ok: true, result: wide });
+    expect(JSON.parse(line ?? '')).toMatchObject({ ok: false });
+  });
+
+  it('drops an oversized event', () => {
+    const event = { event: 'status', data: { last_error: huge } } as unknown as DaemonEvent;
+    expect(encodeOutbound(event)).toBeUndefined();
   });
 });

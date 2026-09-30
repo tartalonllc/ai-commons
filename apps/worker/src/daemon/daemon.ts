@@ -23,6 +23,7 @@ import { WorkerRunner, type RunnerDeps } from '../runner.js';
 import { secretAccounts, SecretStoreUnavailableError, type SecretStore } from '../secrets.js';
 import { localTotals, type LocalTotals } from '../stats.js';
 import {
+  DAEMON_MAX_LINE_BYTES,
   parseRequestLine,
   type DaemonErrorCode,
   type DaemonEvent,
@@ -71,6 +72,24 @@ function emptyTotals(): LocalTotals {
     local_inference_ms: 0,
     api_cost_usd: 0,
   };
+}
+
+/**
+ * Serializes one outbound message (without the trailing newline). A line over
+ * DAEMON_MAX_LINE_BYTES would be discarded by the shell, leaving a request
+ * hanging until it times out, so an oversized response becomes an `internal`
+ * error for the same id. An oversized event is dropped: returns undefined.
+ */
+export function encodeOutbound(message: DaemonResponse | DaemonEvent): string | undefined {
+  const line = JSON.stringify(message);
+  if (Buffer.byteLength(line, 'utf8') <= DAEMON_MAX_LINE_BYTES) return line;
+  if ('event' in message) return undefined;
+  const fallback: DaemonResponse = {
+    id: message.id,
+    ok: false,
+    error: { code: 'internal', message: 'Response too large' },
+  };
+  return JSON.stringify(fallback);
 }
 
 function errorMessage(error: unknown): string {
@@ -601,7 +620,16 @@ export class WorkerDaemon {
   }
 
   private write(message: DaemonResponse | DaemonEvent): void {
-    this.deps.output.write(`${JSON.stringify(message)}\n`);
+    const line = encodeOutbound(message);
+    if (line === undefined) {
+      // Only the message kind: the payload itself is never logged.
+      this.deps.logger.warn(
+        { event: 'event' in message ? message.event : 'response' },
+        'dropped an oversized daemon message',
+      );
+      return;
+    }
+    this.deps.output.write(`${line}\n`);
   }
 
   private scrub(error: unknown, knownSecrets: readonly string[] = []): string {
