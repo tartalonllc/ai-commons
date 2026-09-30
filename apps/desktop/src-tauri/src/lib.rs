@@ -1,5 +1,6 @@
 // apps/desktop/src-tauri/src/lib.rs  (temporary; replaced in Task 18)
 mod framing;
+mod idle;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
