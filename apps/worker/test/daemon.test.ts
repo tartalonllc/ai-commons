@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
@@ -256,8 +256,73 @@ describe('WorkerDaemon', () => {
     const { h, paths } = await startDaemon();
     await until(() => h.events().some((e) => e.connection === 'connected'));
     expect((await loadConfig(paths.configFile)).worker_id).toBe('worker_test1');
-    expect((await h.request('saveConfig', { config: testConfig(coordinator.url) })).ok).toBe(true);
+    const saved = await h.request('saveConfig', { config: testConfig(coordinator.url) });
+    expect(saved).toMatchObject({ ok: true, result: { worker_id: 'worker_test1' } });
     expect((await loadConfig(paths.configFile)).worker_id).toBe('worker_test1');
+  });
+
+  it('drops the worker_id when saved config points at another coordinator', async () => {
+    const other = await new FakeCoordinator().start();
+    try {
+      const { h, daemon } = await startDaemon();
+      await until(() => h.events().some((e) => e.connection === 'connected'));
+      const saved = await h.request('saveConfig', { config: testConfig(other.url) });
+      expect(saved.ok).toBe(true);
+      expect((saved.result as WorkerConfig).coordinator_url).toBe(other.url);
+      expect((saved.result as WorkerConfig).worker_id).toBeUndefined();
+      await daemon.shutdown();
+    } finally {
+      await other.stop();
+    }
+  });
+
+  it('refuses config and key changes once shutdown has begun', async () => {
+    coordinator.state.queue.push(leasedTask(1));
+    const slow = new FakeProvider('ollama', 'local', [
+      async (req) => {
+        await new Promise((resolve) => setTimeout(resolve, 300));
+        return ok({ field: 'biology', confidence: 0.9 })(req);
+      },
+    ]);
+    const { h, daemon } = await startDaemon({ ollamaFactory: async () => slow });
+    await until(() => slow.calls.length === 1);
+    expect((await h.request('shutdown')).ok).toBe(true);
+    const refused = { ok: false, error: { code: 'unavailable' } };
+    expect(await h.request('setMode', { mode: 'paused' })).toMatchObject(refused);
+    expect(await h.request('resume')).toMatchObject(refused);
+    expect(await h.request('setKey', { provider: 'openai', key: API_KEY })).toMatchObject(refused);
+    expect(await h.request('deleteKey', { provider: 'openai' })).toMatchObject(refused);
+    expect(await h.request('saveConfig', { config: testConfig(coordinator.url) })).toMatchObject(
+      refused,
+    );
+    await daemon.finished();
+    expect(coordinator.state.results).toHaveLength(1);
+  });
+
+  it('shows why an existing config was rejected, even after a lock retry', async () => {
+    const invalid = {
+      ...testConfig(coordinator.url),
+      providers: [
+        { id: 'openai', kind: 'remote', enabled: true, models: [], endpoint: 'http://example.org' },
+      ],
+    };
+    writeFileSync(join(dir, 'config.json'), JSON.stringify(invalid));
+    const held = acquireInstanceLock(dir);
+    let released = false;
+    try {
+      const { h, log } = await startDaemon({ configured: false });
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      expect(log.text().split('cannot contribute yet').length - 1).toBe(1);
+
+      held.release();
+      released = true;
+      await until(() => h.events().some((e) => e.connection === 'unconfigured'));
+      const status = await h.status();
+      expect(status.connection).toBe('unconfigured');
+      expect(status.last_error).toMatch(/https/);
+    } finally {
+      if (!released) held.release();
+    }
   });
 
   it('does not restart the runner when providers only differ in key order', async () => {

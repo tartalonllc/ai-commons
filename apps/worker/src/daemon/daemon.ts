@@ -100,6 +100,10 @@ export class WorkerDaemon {
   private idle = false;
   private readonly keys = new Map<string, boolean>();
   private lastError: string | undefined;
+  /** Why the existing config file was rejected at startup; cleared by the next save. */
+  private configError: string | undefined;
+  /** The last lock/DB open failure, so retries log once and clear only their own error. */
+  private storageError: string | undefined;
   private lifecycle: Promise<void> = Promise.resolve();
   private configOps: Promise<void> = Promise.resolve();
   private retryTimer: NodeJS.Timeout | undefined;
@@ -121,8 +125,10 @@ export class WorkerDaemon {
       this.configured = await configExists(paths.configFile);
       this.config = await loadConfig(paths.configFile);
     } catch (error) {
+      // Shown as last_error so the UI can say why setup is being asked for again.
       this.configured = false;
-      this.lastError = this.scrub(error);
+      this.configError = this.scrub(error);
+      this.deps.logger.warn({ err: this.configError }, 'existing worker config is invalid');
     }
     await this.refreshKeys();
 
@@ -204,7 +210,7 @@ export class WorkerDaemon {
     const workerId = this.runner?.workerId ?? this.config.worker_id;
     if (workerId !== undefined) status.worker_id = workerId;
     if (snap?.current) status.current = snap.current;
-    const lastError = snap?.last_error ?? this.lastError;
+    const lastError = snap?.last_error ?? this.lastError ?? this.configError;
     if (lastError !== undefined) status.last_error = lastError;
     return status;
   }
@@ -247,18 +253,27 @@ export class WorkerDaemon {
       case 'getConfig':
         return this.config;
       case 'saveConfig': {
+        this.refuseWhileStopping();
         const next = validateConfig(request.params.config);
-        // The settings form may not carry worker_id; losing it would force a re-registration.
-        await this.writeConfig((current) =>
-          current.worker_id !== undefined && next.worker_id === undefined
-            ? { ...next, worker_id: current.worker_id }
-            : next,
-        );
-        return this.config;
+        // The settings form may not carry worker_id; losing it would force a
+        // re-registration. It only means something to the coordinator that issued it.
+        let saved = next;
+        await this.writeConfig((current) => {
+          saved =
+            current.worker_id !== undefined &&
+            next.worker_id === undefined &&
+            next.coordinator_url === current.coordinator_url
+              ? { ...next, worker_id: current.worker_id }
+              : next;
+          return saved;
+        });
+        return saved;
       }
       case 'setMode':
+        this.refuseWhileStopping();
         return { mode: await this.setMode(request.params.mode) };
       case 'resume': {
+        this.refuseWhileStopping();
         // Nothing to resume from: report the current mode and write nothing.
         if (this.configured && this.config.schedule.mode !== 'paused') {
           return { mode: this.config.schedule.mode };
@@ -267,9 +282,11 @@ export class WorkerDaemon {
         return { mode: await this.setMode(stored === 'idle_only' ? 'idle_only' : 'active') };
       }
       case 'setKey':
+        this.refuseWhileStopping();
         await this.setKey(request.params.provider, request.params.key);
         return { stored: true };
       case 'deleteKey':
+        this.refuseWhileStopping();
         return { removed: await this.deleteKey(request.params.provider) };
       case 'probeProvider':
         return this.probe(request.params.id, request.params.endpoint);
@@ -283,6 +300,14 @@ export class WorkerDaemon {
         setImmediate(() => void this.shutdown());
         return { stopping: true };
     }
+  }
+
+  /**
+   * Once shutdown starts, nothing new may reach the config file or keyring, so
+   * shutdown's single wait on `configOps` covers every write.
+   */
+  private refuseWhileStopping(): void {
+    if (this.stopping) throw new DaemonError('unavailable', 'The worker is shutting down.');
   }
 
   /**
@@ -314,6 +339,7 @@ export class WorkerDaemon {
       const wasConfigured = this.configured;
       this.config = next;
       this.configured = true;
+      this.configError = undefined;
       if (!wasConfigured || needsRestart(prev, next)) {
         void this.enqueue(() => this.restartRunner());
       }
@@ -444,12 +470,21 @@ export class WorkerDaemon {
     try {
       this.lock = (this.deps.acquireLock ?? acquireInstanceLock)(paths.dataDir);
       this.db = new WorkerDatabase(paths.databaseFile);
+      // Clear only our own error; anything else (e.g. from refreshKeys) stays visible.
+      if (this.storageError !== undefined && this.lastError === this.storageError) {
+        this.lastError = undefined;
+      }
+      this.storageError = undefined;
       return true;
     } catch (error) {
       this.lock?.release();
       this.lock = undefined;
-      this.lastError = this.scrub(error);
-      logger.warn({ err: this.lastError }, 'worker daemon cannot contribute yet; will retry');
+      const message = this.scrub(error);
+      if (message !== this.storageError) {
+        logger.warn({ err: message }, 'worker daemon cannot contribute yet; will retry');
+      }
+      this.storageError = message;
+      this.lastError = message;
       return false;
     }
   }
@@ -462,7 +497,6 @@ export class WorkerDaemon {
         this.emitStatus();
         return;
       }
-      this.lastError = undefined;
       this.emitStatus();
     }
     if (!this.configured || !this.db) return;
