@@ -45,3 +45,28 @@ sent to the coordinator.
 - Remote providers receive the full task input. The worker discloses this, uses
   remote providers only for projects the volunteer explicitly allows, and never
   for `local_models_only` tasks.
+- Remote provider endpoints must use `https://` unless they point at the local
+  machine (see `docs/providers.md`), so a stored API key is never sent in
+  cleartext over a network.
+
+## Desktop app (Windows)
+
+`apps/desktop` (see `docs/desktop.md`) adds a Rust shell around the same
+worker, with its own boundaries:
+
+- **Keys** travel webview → Rust → daemon stdin → OS keyring only. The
+  daemon logs a request's method name, never its params, so a key passed to
+  `setKey` never reaches a log line. The Settings key field is cleared
+  immediately after submit.
+- **IPC allow-list:** the webview can reach the daemon only through the
+  Rust `daemon_request` command, which forwards only an explicit allow-list
+  of methods. `setIdle` and `shutdown` are reserved for the shell itself and
+  are never reachable from the webview.
+- **Content-Security-Policy:** `default-src 'self'; style-src 'self';
+connect-src ipc: http://ipc.localhost; object-src 'none'; base-uri 'none';
+form-action 'none'; frame-ancestors 'none'`. The webview's Tauri
+  capabilities grant only `core:event:allow-listen` and
+  `core:event:allow-unlisten`; there is no `shell`, `fs` or `http` plugin.
+- **Windows Job Object:** the daemon process is assigned to a job with
+  `KILL_ON_JOB_CLOSE`, so a crashed shell can't leave the worker (and its
+  access to the keyring) running unsupervised in the background.

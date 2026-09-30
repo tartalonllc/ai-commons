@@ -8,7 +8,7 @@ _Pick up here. Current state: [PROGRESS.md](./PROGRESS.md). Spec: [`Open Compute
 docker compose up -d        # Postgres on :55432 (container aicommons-postgres)
 pnpm install
 pnpm build
-pnpm test                   # expect 277 passing
+pnpm test                   # expect 430 passing
 ```
 
 Run the full stack locally:
@@ -39,25 +39,10 @@ Notes:
 
 ## Open decision: what next?
 
-The last session ended by asking the user to choose among these. **Ask before starting
-A or C.** A needs the Rust toolchain installed; C makes the code public.
-
-### A. Windows desktop worker (§68 step 20, §35–§36): _largest remaining item_
-
-- **Prerequisite:** install the Rust toolchain (`rustup`) and the Tauri v2 prerequisites
-  (WebView2 is already present on Windows 11).
-- Tauri app in `apps/desktop` that wraps the existing worker. Two options:
-  - Run `apps/worker` as a Node sidecar and talk to it over a local IPC or status socket.
-    This reuses all current logic and is the recommended option.
-  - Or port the pipeline to Rust. That's more work, and it would duplicate the budget
-    logic, which the spec forbids weakening.
-- Build the §35 status screen (connection, current project/task, today's contribution,
-  enabled providers, daily/monthly limits, a pause button). Build the §36 settings
-  (coordinator, providers and models, limits, schedule, categories), and `set-key` through
-  the OS keyring.
-- Implement real `idle_only` using Windows idle detection (`GetLastInputInfo`); it's
-  currently refused at `start`.
-- Produce a signed or unsigned MSI/NSIS installer, and add a CI build job.
+The Windows desktop worker (§68 step 20, §35–§36) is done — see
+[`docs/desktop.md`](./docs/desktop.md) and the e2e results in PROGRESS.md. The last
+session ended by asking the user to choose between the two remaining options below.
+**Ask before starting C**, since it makes the code public.
 
 ### B. MVP acceptance scale-up (§59–§60)
 
@@ -93,8 +78,15 @@ A or C.** A needs the Rust toolchain installed; C makes the code public.
 
 - **Worker:**
   - Add a `configure --endpoint <provider>=<url>` flag.
-  - Fill `context_window` automatically from `provider.getModels()`.
-  - Add a single-instance lock for `start`.
+- **Desktop app (Windows):**
+  - Code signing for the installer (SmartScreen currently warns on first run).
+  - A CI `windows-latest` job that runs `cargo test` and `cargo tauri build` (there is
+    none yet; the desktop app has only been built and tested locally).
+  - Auto-update.
+  - Watch for a recurrence of the unreproduced idle-only observation from the 2026-09-30
+    e2e run (one run stayed on "Waiting for idle" for several minutes; two follow-up
+    attempts with debug logging on could not reproduce it). If it recurs, capture the
+    daemon's debug log and the Rust idle poller's samples around the stuck period.
 - **Coordinator:**
   - Return a short `retry_after_ms` when a lease comes back empty because of lock
     contention (vs an empty queue).

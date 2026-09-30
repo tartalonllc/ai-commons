@@ -104,3 +104,13 @@ new OpenAIProvider({
 Pricing is supplied by the worker configuration rather than shipped as defaults,
 because provider prices change and a stale built-in table would silently
 under-budget.
+
+## Remote endpoints must use TLS
+
+A provider endpoint can carry an API key, so the worker refuses a remote
+(non-local) endpoint that isn't `https://`. This is enforced in
+`validateConfig` and, separately, wherever an endpoint is used before it's
+saved to config — `probeProvider` in the desktop daemon (`docs/desktop.md`)
+and the CLI's `configure`. Only `localhost`, `127.0.0.1` and `::1` are exempt.
+An existing config with a plain-`http://` remote endpoint fails to load; see
+`docs/worker.md`.

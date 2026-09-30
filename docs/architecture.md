@@ -27,8 +27,16 @@ Project owner ──(project-sdk)──► Coordinator ◄──── Dashboard
 | `packages/project-sdk`    | `defineProject`, admin client, JSONL ingestion                           |
 | `apps/coordinator`        | Fastify API, task queue, leasing, validation, accounting                 |
 | `apps/worker`             | CLI worker: execution pipeline, local limits, budget, credentials        |
+| `apps/desktop`            | Windows desktop app: Tauri shell around the worker daemon                |
 | `apps/dashboard`          | Network, project, and contribution views                                 |
 | `examples/*`              | Example workloads                                                        |
+
+`apps/desktop` wraps `apps/worker` for volunteers who don't want a terminal.
+A Rust shell (Tauri v2) owns the window, tray and idle detection, and
+supervises the worker as a child process, relaying newline-delimited JSON
+over stdio; it never reads config, SQLite or the keyring directly. The
+webview talks only to the shell's own Tauri commands, never to the worker
+daemon or the network directly. Details: `docs/desktop.md`.
 
 ## Data flow
 

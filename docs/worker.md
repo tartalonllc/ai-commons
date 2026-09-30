@@ -17,7 +17,9 @@ output, and submits results, while enforcing the volunteer's limits locally.
 | `aicommons inspect <project>`     | Description, prompt template, output schema, requirements (§44)   |
 
 API keys are never accepted as command-line arguments (they would end up in
-shell history and process listings).
+shell history and process listings). `start` refuses to run while another
+worker holds `worker.lock` in the data dir (see "Single-instance lock"
+below).
 
 ## Files
 
@@ -28,6 +30,33 @@ shell history and process listings).
 
 `AICOMMONS_CONFIG_DIR` / `AICOMMONS_DATA_DIR` override these. The config file
 holds no secrets; its schema rejects unknown fields.
+
+## Single-instance lock
+
+`src/lock.ts` writes an exclusive `worker.lock` (containing the PID) into the
+data dir, acquired by both `aicommons start` and the desktop daemon. It's
+created atomically: the PID is written to a temp file, then that file is
+hard-linked into place, so the lock never exists without its PID already in
+it. A lock is reclaimed when its PID is no longer running, its content isn't
+a readable PID, or its mtime predates the current boot (which means any PID
+it names has since been recycled). Budget safety never depends on this lock
+— reservations are transactional — it only prevents double contribution and
+duplicate heartbeats.
+
+Two caveats: hard links fail on FAT32/exFAT and on some network drives, so
+pointing `AICOMMONS_DATA_DIR` at one of those breaks startup. A large clock
+correction right after boot can also make a live lock look like it predates
+boot and get reclaimed from under a running process.
+
+## Desktop daemon
+
+The Windows desktop app (`docs/desktop.md`) runs this same worker as a
+supervised child process — a "daemon" speaking newline-delimited JSON over
+stdio — instead of the CLI's `start` loop. `apps/worker/src/daemon/*` holds
+the wire protocol and the `WorkerDaemon` request loop; `pnpm --filter
+@ai-commons/worker bundle:daemon` produces the esbuild bundle
+(`dist-daemon/worker-daemon.mjs`) that the desktop app stages into its
+runtime resources.
 
 ## Execution pipeline
 
@@ -92,8 +121,19 @@ factory: async (cfg, secrets) => {
 },
 ```
 
+## Provider endpoints must use TLS remotely
+
+`validateConfig` (and `probeProvider` in the desktop daemon) reject a remote
+provider endpoint that isn't `https://`, unless it points at this machine
+(`localhost`, `127.0.0.1`, `::1`). A provider endpoint can carry an API key,
+so sending it in cleartext to anything but the local machine is refused. An
+existing config with a plain-`http://` remote endpoint now fails to load;
+the desktop app surfaces why in its "last error" banner, and the CLI reports
+it as a `ConfigError`. Edit the endpoint (or `configure` again) to fix it.
+
 ## Not yet implemented
 
-- Idle-only scheduling (config accepts `idle_only`, `start` refuses it).
+- Idle-only scheduling requires the desktop app (the CLI has no idle source
+  and refuses it).
 - CPU/GPU percentage limits are recorded but advisory.
 - One task at a time per worker process.
