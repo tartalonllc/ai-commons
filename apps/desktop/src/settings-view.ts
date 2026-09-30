@@ -275,7 +275,10 @@ export function renderSettings(
   handlers: SettingsHandlers,
 ): HTMLFormElement {
   let current = initial;
-  const initialMode = initial.schedule.mode;
+  // Baseline for "did the user touch the mode radio". Reset after each
+  // successful save so the next save compares against the saved mode, not
+  // the mode the form happened to render with.
+  let initialMode = initial.schedule.mode;
   const ollama = initial.providers.find((p) => p.id === 'ollama');
   const openai = initial.providers.find((p) => p.id === 'openai');
   const openaiModel = openai?.models[0]?.name ?? '';
@@ -588,6 +591,7 @@ export function renderSettings(
         }
         await handlers.onSave(result.config);
         current = result.config;
+        initialMode = result.config.schedule.mode;
         setMsg(formMsg, 'Settings saved.', 'ok');
       } catch (error) {
         setMsg(formMsg, errorText(error), 'danger');

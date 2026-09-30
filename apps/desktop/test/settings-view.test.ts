@@ -1,4 +1,4 @@
-import type { WorkerConfig } from '@ai-commons/worker';
+import type { ScheduleMode, WorkerConfig } from '@ai-commons/worker';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { readSettingsForm, renderSettings, type SettingsHandlers } from '../src/settings-view.js';
 import { $, config, flush, status, text } from './fixtures.js';
@@ -369,6 +369,26 @@ describe('renderSettings', () => {
     await flush();
     expect(saved).toHaveLength(1);
     expect(saved[0]?.schedule.mode).toBe('idle_only');
+  });
+
+  it('resets the mode baseline after a successful save', async () => {
+    let mode: ScheduleMode = 'active';
+    const { form, saved } = mount(config(), { currentMode: () => mode });
+
+    choose(form, 'mode', 'paused');
+    submit(form);
+    await flush();
+    expect(saved).toHaveLength(1);
+    expect(saved[0]?.schedule.mode).toBe('paused');
+
+    // The tray resumed the worker in the meantime; the mode radio is still
+    // showing "Paused" because the form was never re-rendered.
+    mode = 'active';
+    setValue(form, 'idle_after_minutes', '15');
+    submit(form);
+    await flush();
+    expect(saved).toHaveLength(2);
+    expect(saved[1]?.schedule.mode).toBe('active');
   });
 
   it('warns instead of silently dropping an unsaved key on Save settings', async () => {
