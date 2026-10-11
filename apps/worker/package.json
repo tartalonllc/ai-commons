@@ -28,6 +28,7 @@
   },
   "dependencies": {
     "@ai-commons/protocol": "workspace:*",
+    "@ai-commons/provider-anthropic": "workspace:*",
     "@ai-commons/provider-core": "workspace:*",
     "@ai-commons/provider-ollama": "workspace:*",
     "@ai-commons/provider-openai": "workspace:*",

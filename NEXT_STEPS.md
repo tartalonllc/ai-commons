@@ -8,7 +8,7 @@ _Pick up here. Current state: [PROGRESS.md](./PROGRESS.md). Spec: [`Open Compute
 docker compose up -d        # Postgres on :55432 (container aicommons-postgres)
 pnpm install
 pnpm build
-pnpm test                   # expect 430 passing
+pnpm test                   # expect 452 passing
 ```
 
 Run the full stack locally:
@@ -37,42 +37,43 @@ Notes:
 - After throwaway e2e runs, delete the test `worker:<coordinator-url>:<worker_id>` entries
   (service `ai-commons`) from Windows Credential Manager.
 
-## Open decision: what next?
+## Current work: MVP acceptance scale-up
 
 The Windows desktop worker (§68 step 20, §35–§36) is done — see
-[`docs/desktop.md`](./docs/desktop.md) and the e2e results in PROGRESS.md. The last
-session ended by asking the user to choose between the two remaining options below.
-**Ask before starting C**, since it makes the code public.
+[`docs/desktop.md`](./docs/desktop.md) and the e2e results in PROGRESS.md. The user selected B.
+A bounded single-machine mixed-provider run is complete; the full 10-machine acceptance test remains.
+The user authorized publishing to the public `ai-commons` GitHub repository on 2026-10-11.
 
 ### B. MVP acceptance scale-up (§59–§60)
 
-1. `cd examples/abstract-classification && node scripts/fetch-arxiv.ts` fetches the full
-   10,000 abstracts into `data/abstracts.jsonl`. It takes about 10 minutes with polite 3s
-   delays, and the file is gitignored.
-2. Publish it to a coordinator.
-3. Add a commercial provider:
+1. **Fetched 9,987 unique abstracts** to `data/abstracts.jsonl`; arXiv rate-limited the final
+   top-off. The fetcher now resumes and honors `Retry-After`; fetch the remaining 13 to reach 10,000.
+2. **Done:** published 9,987 tasks to the local coordinator.
+3. **Done:** added the commercial provider and completed 101 live calls within the local budget caps:
    - `aicommons set-key openai`
    - Add `pricing` for one cheap model to the worker config (USD per 1M input and output tokens).
    - Set `--daily-usd 0.25 --monthly-usd 5`.
-   - This is the **first live OpenAI call**; verify token and cost accounting against the
-     OpenAI usage dashboard.
-4. Run several workers (and more machines if possible) with a mix of Ollama and OpenAI.
-   Confirm the §59 criteria: leasing, validation, budget enforcement, contribution
-   accounting, and that no credentials pass through the coordinator (grep coordinator
-   logs and the database).
-5. Throughput at about 4 s per task on this CPU is roughly 900 tasks/hour for each Ollama
-   instance. Plan multiple machines, or accept a long run.
+   - First live call verified token and cost accounting: 741 input / 56 output tokens and
+     USD 0.000386; OpenAI Usage dashboard now shows the usage.
+   - Anthropic Messages API, keyring setup, desktop Settings controls, pricing config, and tests are implemented.
+     The key is stored; the bounded live check received HTTP 400 during the model availability
+     preflight, before sending an inference request. Confirm API key/workspace access before retrying.
+4. **Partial:** two local workers and one OpenAI worker completed 127 tasks on one machine,
+   with zero task failures; coordinator cost was USD 0.0402844 and the worker ledger showed USD 0.0414 (including a conservative unknown-billed charge). Repeat across more machines and continue
+   toward 10,000 tasks; verify credential isolation in coordinator logs and the database.
+5. The user does not yet have 10 machines. Continue with a low-volume, mixed-provider validation
+   on the available PC; do not run the full dataset against both Ollama workers while CPU/GPU
+   limits remain advisory. Revisit the 10-machine acceptance test when more workers are available.
 
 ### C. Publish to GitHub
 
-- Confirm the repo name and org with the user (spec suggests `ai-commons`; hosted-service
-  owner is Tartalon, §62).
+- **Done:** user confirmed the public target `tartalonllc/ai-commons`; `origin` points to it.
 - Add the missing §55 files: `CONTRIBUTING.md`, `SECURITY.md` (with a vulnerability
   reporting contact), and `CODE_OF_CONDUCT.md`.
-- Rewrite the README to answer all ten §56 questions.
+- **Done:** rewrote the README to answer the ten §56 questions.
 - Enable Issues and Discussions (§55).
-- `git remote add origin …`, push `main`, then check that CI goes green on both the
-  Linux and Windows jobs. **The workflow has never run.**
+- Check the CI result after this push. There is no Windows CI job yet; see the desktop
+  follow-ups below.
 
 ## Smaller follow-ups (any time, low risk)
 
@@ -106,7 +107,7 @@ session ended by asking the user to choose between the two remaining options bel
 ## Working conventions used so far
 
 - Follow `AGENTS.md`, and run format, lint, typecheck and tests before each commit.
-- Commits end with a `Co-Authored-By` line. There's no remote yet, so nothing has been pushed.
+- Commits end with a `Co-Authored-By` line. The public GitHub remote is now configured.
 - The user OK'd parallel subagents. Each works in its own git worktree against the shared
   contracts (protocol, provider-core, validators), and the main session merges and
   regenerates `pnpm-lock.yaml` on conflict.

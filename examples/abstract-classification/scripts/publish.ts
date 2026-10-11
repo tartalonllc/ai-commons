@@ -34,6 +34,7 @@ async function* tasks(): AsyncGenerator<TaskInput> {
 
 const result = await client.ingestTasks(project, tasks(), {
   skipInvalid: true,
+  batchSize: 250,
   onBatch: ({ created, skipped }) => console.log(`created ${created}, skipped ${skipped}`),
 });
 console.log(`Done: ${result.created} tasks created, ${result.skipped.length} skipped`);

@@ -1,3 +1,4 @@
+import { AnthropicProvider } from '@ai-commons/provider-anthropic';
 import { OllamaProvider } from '@ai-commons/provider-ollama';
 import { OpenAIProvider } from '@ai-commons/provider-openai';
 import { secretAccounts } from '../secrets.js';
@@ -25,6 +26,21 @@ export function builtinProviders(): ProviderRegistry {
         const apiKey = await secrets.get(secretAccounts.provider(cfg.id));
         if (!apiKey) throw new Error(`No API key stored; run "aicommons set-key ${cfg.id}"`);
         return new OpenAIProvider({
+          apiKey,
+          pricing: cfg.pricing ?? {},
+          ...(cfg.endpoint === undefined ? {} : { baseUrl: cfg.endpoint }),
+        });
+      },
+    })
+    .register({
+      id: 'anthropic',
+      kind: 'remote',
+      displayName: 'Anthropic Claude API',
+      requiresKey: true,
+      factory: async (cfg, secrets) => {
+        const apiKey = await secrets.get(secretAccounts.provider(cfg.id));
+        if (!apiKey) throw new Error(`No API key stored; run "aicommons set-key ${cfg.id}"`);
+        return new AnthropicProvider({
           apiKey,
           pricing: cfg.pricing ?? {},
           ...(cfg.endpoint === undefined ? {} : { baseUrl: cfg.endpoint }),

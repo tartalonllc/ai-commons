@@ -5,7 +5,7 @@ import type { TSchema } from 'typebox';
 import Value from 'typebox/value';
 import { describe, expect, it } from 'vitest';
 import project from '../project.ts';
-import { arxivTaskId, decodeXml, parseArxivFeed } from '../scripts/arxiv.ts';
+import { arxivTaskId, decodeXml, parseArxivFeed, retryDelayMs } from '../scripts/arxiv.ts';
 
 const samplePath = fileURLToPath(new URL('../data/sample.jsonl', import.meta.url));
 
@@ -73,5 +73,17 @@ describe('arXiv feed parsing', () => {
 
   it('leaves unknown entities intact', () => {
     expect(decodeXml('a &nbsp; b')).toBe('a &nbsp; b');
+  });
+});
+
+describe('arXiv rate limit retry delay', () => {
+  it('honors a Retry-After delay and bounds it to five minutes', () => {
+    expect(retryDelayMs('2', 1)).toBe(2_000);
+    expect(retryDelayMs('600', 1)).toBe(300_000);
+  });
+
+  it('uses an increasing fallback delay for invalid headers', () => {
+    expect(retryDelayMs('invalid', 2)).toBe(60_000);
+    expect(retryDelayMs(null, 20)).toBe(300_000);
   });
 });

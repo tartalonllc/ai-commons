@@ -74,6 +74,49 @@ function modelWithContextWindow(el: HTMLInputElement): Model {
     : { name: el.value };
 }
 
+function readRemoteProvider(
+  form: HTMLFormElement,
+  base: ProviderConfig | undefined,
+  id: 'openai' | 'anthropic',
+  displayName: string,
+): { config?: ProviderConfig; error?: string } {
+  const enabled = checked(form, `${id}.enabled`);
+  const model = field(form, `${id}.model`).value.trim();
+  const inPrice = field(form, `${id}.input_price`).value.trim();
+  const outPrice = field(form, `${id}.output_price`).value.trim();
+  if (!enabled && !model && !base) return {};
+
+  const priced = model !== '' && inPrice !== '' && outPrice !== '';
+  if (enabled && !priced) {
+    return { error: `${displayName} needs a model and its prices per 1M input and output tokens.` };
+  }
+  const inputPrice = Number(inPrice);
+  const outputPrice = Number(outPrice);
+  if (priced && (!(inputPrice > 0) || !(outputPrice > 0))) {
+    return { error: 'Prices must be greater than zero for a paid model.' };
+  }
+
+  // The form edits the first model only; additional configured models survive.
+  const extraModels = (base?.models ?? []).slice(1);
+  const models = model ? [{ name: model }, ...extraModels] : extraModels;
+  const pricing = priced
+    ? {
+        ...base?.pricing,
+        [model]: { input_per_mtok: inputPrice, output_per_mtok: outputPrice },
+      }
+    : base?.pricing;
+  return {
+    config: {
+      id,
+      kind: 'remote',
+      enabled,
+      models,
+      ...(base?.endpoint === undefined ? {} : { endpoint: base.endpoint }),
+      ...(pricing ? { pricing } : {}),
+    },
+  };
+}
+
 /** Pure DOM → WorkerConfig. The daemon validates again; this gives friendlier messages. */
 export function readSettingsForm(form: HTMLFormElement, base: WorkerConfig): FormResult {
   const coordinator = field(form, 'coordinator_url').value.trim();
@@ -138,50 +181,33 @@ export function readSettingsForm(form: HTMLFormElement, base: WorkerConfig): For
     models: checkedBoxes(form, 'ollama.model').map(modelWithContextWindow),
   };
 
-  const openaiBase = base.providers.find((p) => p.id === 'openai');
-  const openaiEnabled = checked(form, 'openai.enabled');
-  const model = field(form, 'openai.model').value.trim();
-  const inPrice = field(form, 'openai.input_price').value.trim();
-  const outPrice = field(form, 'openai.output_price').value.trim();
-  let openai: ProviderConfig | undefined;
-  if (openaiEnabled || model || openaiBase) {
-    const priced = model !== '' && inPrice !== '' && outPrice !== '';
-    if (openaiEnabled && !priced) {
-      return {
-        ok: false,
-        error: 'OpenAI needs a model and its prices per 1M input and output tokens.',
-      };
-    }
-    const input = Number(inPrice);
-    const output = Number(outPrice);
-    if (priced && (!(input > 0) || !(output > 0))) {
-      return { ok: false, error: 'Prices must be greater than zero for a paid model.' };
-    }
-    // Only models[0] and its pricing entry are driven by the form; any other
-    // configured models and prices (added some other way) survive untouched.
-    const extraModels = (openaiBase?.models ?? []).slice(1);
-    const models = model ? [{ name: model }, ...extraModels] : extraModels;
-    const pricing = priced
-      ? {
-          ...openaiBase?.pricing,
-          [model]: { input_per_mtok: input, output_per_mtok: output },
-        }
-      : openaiBase?.pricing;
-    openai = {
-      id: 'openai',
-      kind: 'remote',
-      enabled: openaiEnabled,
-      models,
-      ...(openaiBase?.endpoint === undefined ? {} : { endpoint: openaiBase.endpoint }),
-      ...(pricing ? { pricing } : {}),
-    };
-  }
+  const openai = readRemoteProvider(
+    form,
+    base.providers.find((p) => p.id === 'openai'),
+    'openai',
+    'OpenAI',
+  );
+  if (openai.error) return { ok: false, error: openai.error };
+  const anthropic = readRemoteProvider(
+    form,
+    base.providers.find((p) => p.id === 'anthropic'),
+    'anthropic',
+    'Anthropic',
+  );
+  if (anthropic.error) return { ok: false, error: anthropic.error };
 
-  const others = base.providers.filter((p) => p.id !== 'ollama' && p.id !== 'openai');
+  const others = base.providers.filter(
+    (p) => p.id !== 'ollama' && p.id !== 'openai' && p.id !== 'anthropic',
+  );
   const config: WorkerConfig = {
     ...base,
     coordinator_url: coordinator,
-    providers: [ollama, ...(openai ? [openai] : []), ...others],
+    providers: [
+      ollama,
+      ...(openai.config ? [openai.config] : []),
+      ...(anthropic.config ? [anthropic.config] : []),
+      ...others,
+    ],
     limits: { ...base.limits, api: { daily_usd: daily, monthly_usd: monthly } },
     schedule: { mode, idle_after_minutes: idleAfter },
     projects: { categories, allow_remote_for_projects: allowRemote },
@@ -269,6 +295,104 @@ function modelList(models: Model[], selected: ReadonlySet<string>): HTMLElement 
   );
 }
 
+interface RemoteKeyControls {
+  state: HTMLElement;
+  input: HTMLInputElement;
+  save: HTMLButtonElement;
+  remove: HTMLButtonElement;
+  message: HTMLElement;
+}
+
+function remoteKeyControls(
+  id: 'openai' | 'anthropic',
+  displayName: string,
+  hasKey: boolean,
+): RemoteKeyControls {
+  const stateId = `${id}-key-state`;
+  const noteId = `${id}-key-note`;
+  const state = h(
+    'span',
+    { class: 'muted', 'data-live': 'key-state', id: stateId },
+    hasKey ? 'Key stored ✓' : 'No key stored',
+  );
+  const keyInput = h('input', {
+    type: 'password',
+    autocomplete: 'new-password',
+    spellcheck: 'false',
+    placeholder: hasKey ? 'Paste a new key to replace it' : 'Paste API key',
+    'aria-label': `${displayName} API key`,
+    'aria-describedby': `${stateId} ${noteId}`,
+    'data-key-input': true,
+    'data-provider': id,
+  });
+  const message = h('span', {
+    class: 'form-msg neutral',
+    role: 'status',
+    'data-msg': id === 'openai' ? 'key' : 'key-anthropic',
+  });
+  const save = actionButton('Save key', id === 'openai' ? 'save-key' : 'save-key-anthropic');
+  const remove = actionButton(
+    'Remove key',
+    id === 'openai' ? 'remove-key' : 'remove-key-anthropic',
+  );
+  return { state, input: keyInput, save, remove, message };
+}
+
+function remoteProviderFields(
+  id: 'openai' | 'anthropic',
+  displayName: string,
+  exampleModel: string,
+  base: ProviderConfig | undefined,
+  controls: RemoteKeyControls,
+): HTMLElement[] {
+  const model = base?.models[0]?.name ?? '';
+  const price = model ? base?.pricing?.[model] : undefined;
+  return [
+    h('h3', {}, `${displayName} (paid API)`),
+    choice(
+      'checkbox',
+      `${id}.enabled`,
+      'on',
+      `Use my ${displayName} API key`,
+      base?.enabled ?? false,
+    ),
+    h(
+      'div',
+      { class: 'field' },
+      h('span', {}, 'API key'),
+      controls.state,
+      controls.input,
+      h('div', { class: 'actions' }, controls.save, controls.remove, controls.message),
+      h(
+        'small',
+        { class: 'muted', id: `${id}-key-note` },
+        'Stored in the operating system credential store. Never sent to the coordinator.',
+      ),
+    ),
+    labeled('Model', input(`${id}.model`, model, { placeholder: `e.g. ${exampleModel}` })),
+    h(
+      'div',
+      { class: 'grid-2' },
+      labeled(
+        'Input $ / 1M tokens',
+        input(`${id}.input_price`, price ? String(price.input_per_mtok) : '', {
+          type: 'number',
+          min: 0,
+          step: 'any',
+        }),
+      ),
+      labeled(
+        'Output $ / 1M tokens',
+        input(`${id}.output_price`, price ? String(price.output_per_mtok) : '', {
+          type: 'number',
+          min: 0,
+          step: 'any',
+        }),
+      ),
+    ),
+  ];
+}
+
 export function renderSettings(
   initial: WorkerConfig,
   status: DaemonStatus | undefined,
@@ -281,39 +405,23 @@ export function renderSettings(
   let initialMode = initial.schedule.mode;
   const ollama = initial.providers.find((p) => p.id === 'ollama');
   const openai = initial.providers.find((p) => p.id === 'openai');
-  const openaiModel = openai?.models[0]?.name ?? '';
-  const price = openaiModel ? openai?.pricing?.[openaiModel] : undefined;
+  const anthropic = initial.providers.find((p) => p.id === 'anthropic');
   const allowRemote = initial.projects.allow_remote_for_projects;
   const cats = initial.projects.categories;
-  const hasKey = status?.providers.find((p) => p.id === 'openai')?.has_key ?? false;
+  const openaiKey = remoteKeyControls(
+    'openai',
+    'OpenAI',
+    status?.providers.find((p) => p.id === 'openai')?.has_key ?? false,
+  );
+  const anthropicKey = remoteKeyControls(
+    'anthropic',
+    'Anthropic',
+    status?.providers.find((p) => p.id === 'anthropic')?.has_key ?? false,
+  );
 
   const probeMsg = h('span', { class: 'form-msg neutral', role: 'status', 'data-msg': 'probe' });
-  const keyMsg = h('span', { class: 'form-msg neutral', role: 'status', 'data-msg': 'key' });
   const formMsg = h('span', { class: 'form-msg neutral', role: 'status', 'data-msg': 'form' });
   const detect = actionButton('Detect models', 'detect');
-  const keyStateId = 'openai-key-state';
-  const keyNoteId = 'openai-key-note';
-  const keyState = h(
-    'span',
-    { class: 'muted', 'data-live': 'key-state', id: keyStateId },
-    hasKey ? 'Key stored ✓' : 'No key stored',
-  );
-  const keyNote = h(
-    'small',
-    { class: 'muted', id: keyNoteId },
-    'Stored in Windows Credential Manager. Never sent to the coordinator.',
-  );
-  const keyInput = h('input', {
-    type: 'password',
-    autocomplete: 'new-password',
-    spellcheck: 'false',
-    placeholder: hasKey ? 'Paste a new key to replace it' : 'sk-…',
-    'aria-label': 'OpenAI API key',
-    'aria-describedby': `${keyStateId} ${keyNoteId}`,
-    'data-key-input': true,
-  });
-  const saveKey = actionButton('Save key', 'save-key');
-  const removeKey = actionButton('Remove key', 'remove-key');
   const submitButton = h('button', { type: 'submit', class: 'primary' }, 'Save settings');
 
   const form = h(
@@ -351,37 +459,13 @@ export function renderSettings(
       labeled('Endpoint', input('ollama.endpoint', ollama?.endpoint ?? OLLAMA_DEFAULT)),
       h('div', { class: 'actions' }, detect, probeMsg),
       modelList(ollama?.models ?? [], new Set(ollama?.models.map((m) => m.name))),
-      h('h3', {}, 'OpenAI (paid API)'),
-      choice('checkbox', 'openai.enabled', 'on', 'Use my OpenAI API key', openai?.enabled ?? false),
-      h(
-        'div',
-        { class: 'field' },
-        h('span', {}, 'API key'),
-        keyState,
-        keyInput,
-        h('div', { class: 'actions' }, saveKey, removeKey, keyMsg),
-        keyNote,
-      ),
-      labeled('Model', input('openai.model', openaiModel, { placeholder: 'e.g. gpt-4o-mini' })),
-      h(
-        'div',
-        { class: 'grid-2' },
-        labeled(
-          'Input $ / 1M tokens',
-          input('openai.input_price', price ? String(price.input_per_mtok) : '', {
-            type: 'number',
-            min: 0,
-            step: 'any',
-          }),
-        ),
-        labeled(
-          'Output $ / 1M tokens',
-          input('openai.output_price', price ? String(price.output_per_mtok) : '', {
-            type: 'number',
-            min: 0,
-            step: 'any',
-          }),
-        ),
+      ...remoteProviderFields('openai', 'OpenAI', 'gpt-4o-mini', openai, openaiKey),
+      ...remoteProviderFields(
+        'anthropic',
+        'Anthropic Claude',
+        'claude-haiku-5-5',
+        anthropic,
+        anthropicKey,
       ),
       h(
         'fieldset',
@@ -527,47 +611,54 @@ export function renderSettings(
     })();
   });
 
-  const submitKey = async () => {
-    const key = keyInput.value.trim();
-    keyInput.value = ''; // never leave a key sitting in the DOM
-    if (!key) {
-      setMsg(keyMsg, 'Paste a key first.', 'warn');
-      return;
-    }
-    try {
-      await handlers.onSetKey('openai', key);
-      keyState.textContent = 'Key stored ✓';
-      setMsg(keyMsg, 'Key saved.', 'ok');
-    } catch (error) {
-      setMsg(keyMsg, errorText(error), 'danger');
-    }
-  };
-  saveKey.addEventListener('click', () => void submitKey());
-  keyInput.addEventListener('keydown', (event) => {
-    if (event.key !== 'Enter') return;
-    event.preventDefault(); // Enter here saves the key, not the whole form
-    void submitKey();
-  });
-  removeKey.addEventListener('click', () => {
-    void (async () => {
-      try {
-        await handlers.onDeleteKey('openai');
-        keyState.textContent = 'No key stored';
-        setMsg(keyMsg, 'Key removed.', 'ok');
-      } catch (error) {
-        setMsg(keyMsg, errorText(error), 'danger');
+  for (const [provider, controls] of [
+    ['openai', openaiKey],
+    ['anthropic', anthropicKey],
+  ] as const) {
+    const submitKey = async () => {
+      const key = controls.input.value.trim();
+      controls.input.value = ''; // never leave a key sitting in the DOM
+      if (!key) {
+        setMsg(controls.message, 'Paste a key first.', 'warn');
+        return;
       }
-    })();
-  });
+      try {
+        await handlers.onSetKey(provider, key);
+        controls.state.textContent = 'Key stored ✓';
+        setMsg(controls.message, 'Key saved.', 'ok');
+      } catch (error) {
+        setMsg(controls.message, errorText(error), 'danger');
+      }
+    };
+    controls.save.addEventListener('click', () => void submitKey());
+    controls.input.addEventListener('keydown', (event) => {
+      if (event.key !== 'Enter') return;
+      event.preventDefault(); // Enter here saves the key, not the whole form
+      void submitKey();
+    });
+    controls.remove.addEventListener('click', () => {
+      void (async () => {
+        try {
+          await handlers.onDeleteKey(provider);
+          controls.state.textContent = 'No key stored';
+          setMsg(controls.message, 'Key removed.', 'ok');
+        } catch (error) {
+          setMsg(controls.message, errorText(error), 'danger');
+        }
+      })();
+    });
+  }
 
   form.addEventListener('submit', (event) => {
     event.preventDefault();
     void (async () => {
       // Typing a key and hitting Save settings (instead of Save key) must never
       // silently drop it, and must never leave it sitting in the DOM either.
-      if (keyInput.value.trim() !== '') {
-        keyInput.value = '';
-        setMsg(keyMsg, 'Use Save key to store the API key', 'warn');
+      for (const controls of [openaiKey, anthropicKey]) {
+        if (controls.input.value.trim() !== '') {
+          controls.input.value = '';
+          setMsg(controls.message, 'Use Save key to store the API key', 'warn');
+        }
       }
 
       const result = readSettingsForm(form, current);

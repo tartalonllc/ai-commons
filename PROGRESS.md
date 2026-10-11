@@ -1,6 +1,6 @@
 # Progress Report
 
-_Last updated: 2026-09-30 · HEAD `501e946` on `feature/desktop-worker` · no remote configured yet_
+_Last updated: 2026-10-11 · branch `main` · public repository: `tartalonllc/ai-commons`_
 
 The build follows the spec in [`Open Compute.md`](./Open%20Compute.md). All 20 steps of
 the §68 build order are **done**, including the Windows desktop worker (step 20).
@@ -8,37 +8,34 @@ See [NEXT_STEPS.md](./NEXT_STEPS.md) to continue.
 
 ## Status at a glance
 
-| §68 step | Item                                                          | Status                                                        |
-| -------- | ------------------------------------------------------------- | ------------------------------------------------------------- |
-| 1–5      | Monorepo, protocol, Project/Task/Result schemas               | ✅                                                            |
-| 6–10     | Postgres schema; register / ingest / lease / result endpoints | ✅                                                            |
-| 11       | CLI worker                                                    | ✅                                                            |
-| 12       | Ollama adapter                                                | ✅ verified against real Ollama (`qwen3:4b`)                  |
-| 13       | Abstract-classification demo                                  | ✅ 20 real arXiv abstracts committed; fetch script for 10k    |
-| 14       | Two+ workers simultaneously                                   | ✅ 3 real workers, 20/20 tasks                                |
-| 15       | Result validation (schema + consensus)                        | ✅                                                            |
-| 16       | Contribution metrics                                          | ✅                                                            |
-| 17       | Commercial provider adapter (OpenAI)                          | ✅ tested against a mocked network only, no live API call yet |
-| 18       | Local budget limiter                                          | ✅                                                            |
-| 19       | Dashboard                                                     | ✅ checked in a real browser (desktop, 390px, dark mode)      |
-| 20       | Package Windows worker (Tauri)                                | ✅ built, installed and run through manual e2e (below)        |
+| §68 step | Item                                                          | Status                                                                                                                 |
+| -------- | ------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| 1–5      | Monorepo, protocol, Project/Task/Result schemas               | ✅                                                                                                                     |
+| 6–10     | Postgres schema; register / ingest / lease / result endpoints | ✅                                                                                                                     |
+| 11       | CLI worker                                                    | ✅                                                                                                                     |
+| 12       | Ollama adapter                                                | ✅ verified against real Ollama (`qwen3:4b`)                                                                           |
+| 13       | Abstract-classification demo                                  | ✅ 20 real arXiv abstracts committed; fetch script for 10k                                                             |
+| 14       | Two+ workers simultaneously                                   | ✅ 3 real workers, 20/20 tasks                                                                                         |
+| 15       | Result validation (schema + consensus)                        | ✅                                                                                                                     |
+| 16       | Contribution metrics                                          | ✅                                                                                                                     |
+| 17       | Commercial provider adapters (OpenAI, Anthropic)              | ✅ OpenAI verified live (101 results); Anthropic adapter integrated; live preflight returned HTTP 400 before inference |
+| 18       | Local budget limiter                                          | ✅                                                                                                                     |
+| 19       | Dashboard                                                     | ✅ checked in a real browser (desktop, 390px, dark mode)                                                               |
+| 20       | Package Windows worker (Tauri)                                | ✅ built, installed and run through manual e2e (below)                                                                 |
 
-The spec's phase success conditions (§58): Phases 1–7 are met. Phase 6's "worker cannot
-exceed spending ceiling" is covered by randomized tests but hasn't been exercised against
-the live OpenAI API. The §59 MVP acceptance test (10 machines, 10,000 tasks, 2 providers)
-has **not** been run yet.
+The spec's phase success conditions (§58): Phases 1–7 are met. Phase 6's spending ceiling is covered by randomized tests and a bounded live OpenAI run within the configured caps; an unknown-billed transient error was charged conservatively. The §59 MVP acceptance test (10 machines, 10,000 tasks, 2 providers) remains incomplete; the current run used one machine and completed 127 of 9,987 tasks.
 
 ## Verification snapshot
 
 - `pnpm format:check`, `pnpm lint`, `pnpm build`, `pnpm typecheck`: all clean.
-- `pnpm test`: **430 tests pass**. By package: protocol 23, validators 22, provider-core 22,
-  provider-ollama 25, provider-openai 36, project-sdk 10, example 6, coordinator 51,
-  worker 128, dashboard 29, desktop (webview) 78.
+- `pnpm test`: **452 tests pass**. By package: protocol 23, validators 22, provider-core 22,
+  provider-ollama 25, provider-openai 36, provider-anthropic 17, project-sdk 10, example 8,
+  coordinator 51, worker 129, dashboard 29, desktop (webview) 80.
   - Coordinator tests need Docker Postgres on port 55432 (`docker compose up -d`).
 - `cargo test` (`apps/desktop/src-tauri`): **43 tests pass** (framing, idle state machine,
   supervisor backoff/tooltip, and the daemon child-process round trip; needs `node` on
   PATH and `apps/desktop/dist` built).
-- CI (`.github/workflows/ci.yml`) is written but **has never run**, because there's no GitHub remote yet.
+- CI (`.github/workflows/ci.yml`) is written but has not run yet; the first push to the configured GitHub remote will trigger it.
   There is no desktop (Windows) CI job yet; see NEXT_STEPS.md.
 
 ### End-to-end runs performed
@@ -76,6 +73,15 @@ has **not** been run yet.
      `\\?\`-prefixed extended-length path Tauri's `resource_dir()` returns (commit
      `501e946`).
 
+4. **Bounded mixed-provider scale-up (2026-10-11, one Windows machine).** Published 9,987
+   abstracts (arXiv rate-limited the final top-off), then ran two `qwen3:4b` Ollama workers
+   and one `gpt-4.1-mini` OpenAI worker. Each processed a 100-result batch; 127 tasks reached
+   consensus, 0 failed. The OpenAI worker completed 100 calls in the batch (plus one initial
+   live call); coordinator reported **USD 0.0402844**; the worker ledger showed **USD 0.0414**, including a conservative charge for one unknown-billed transient error. Both remained well
+   below the configured USD 0.25/day and USD 5/month caps. The first live call reported 741 input and 56 output
+   tokens at `$0.000386`. One transient `unavailable` provider error retried; no task failed.
+   This was a single-machine smoke-scale run, not the full 10-machine, 10,000-task acceptance test.
+
 ## What exists
 
 | Path                               | Package                            | Summary                                                                                                                                            |
@@ -85,6 +91,7 @@ has **not** been run yet.
 | `packages/providers/core`          | `@ai-commons/provider-core`        | `AIProvider` interface, `ProviderError` (with `billed`), shared HTTP helper                                                                        |
 | `packages/providers/ollama`        | `@ai-commons/provider-ollama`      | `/api/chat` with structured `format`, `think:false`, token metrics                                                                                 |
 | `packages/providers/openai`        | `@ai-commons/provider-openai`      | Chat Completions with `json_schema`; refuses unpriced models; key only in the auth header                                                          |
+| `packages/providers/anthropic`     | `@ai-commons/provider-anthropic`   | Messages API structured output; refuses unpriced models; key only in `x-api-key` header                                                            |
 | `packages/project-sdk`             | `@ai-commons/project-sdk`          | `defineProject`, `CoordinatorAdminClient`, `readJsonl`                                                                                             |
 | `apps/coordinator`                 | `@ai-commons/coordinator`          | Fastify + Drizzle/Postgres, leasing with `SKIP LOCKED`, consensus, rate limits, `/network`, `/metrics`                                             |
 | `apps/worker`                      | `@ai-commons/worker` (`aicommons`) | CLI worker with SQLite accounting, budget reservations, OS keyring secrets, retries 5s/30s; `src/daemon/*` adds a stdio daemon for the desktop app |
@@ -135,6 +142,7 @@ These came from the agents' reports and are tracked in NEXT_STEPS.md.
   - There are no CORS headers.
   - The `/network` workers list is capped at 100.
 - **Worker:**
+  - Anthropic is integrated and its key is stored in the OS credential store. The bounded live check stopped at the model availability preflight with HTTP 400; no inference request was sent. Confirm API key/workspace access before retrying.
   - CPU and GPU percentage limits are recorded but not enforced.
   - It runs one task at a time.
   - There's no `--endpoint` flag for `configure`, so a custom Ollama URL has to be edited
@@ -156,7 +164,7 @@ These came from the agents' reports and are tracked in NEXT_STEPS.md.
 - **Providers:**
   - `estimateTokens` assumes about 4 characters per token, which undercounts some
     languages. OpenAI compensates with a 1.5× safety factor.
-  - OpenAI has never been called live.
+  - OpenAI has a bounded 101-call live run; the full 10,000-task acceptance test remains.
 - **Validation:** a task whose two replicas disagree waits for a _third distinct_ worker.
   With only two volunteers online it stalls, and the dashboard doesn't show that state.
 - **Dashboard:**

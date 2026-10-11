@@ -39,15 +39,16 @@ money. The worker releases a budget reservation only on `false`; `true` and
 unknown (`undefined`) are charged at the reserved worst case, so spend is never
 under-counted.
 
-| Condition                                                         | `billed`    |
-| ----------------------------------------------------------------- | ----------- |
-| Refused before sending (unpriced model, bad config, pre-aborted)  | `false`     |
-| Connection refused / DNS failure (`ECONNREFUSED`, `ENOTFOUND`…)   | `false`     |
-| HTTP 4xx (401, 403, 404, 429, other)                              | `false`     |
-| HTTP 5xx                                                          | `undefined` |
-| Timeout, mid-flight cancellation, other network failure           | `undefined` |
-| OpenAI HTTP 200 with unusable output (bad JSON, refusal, cut off) | `true`      |
-| Any Ollama (local) failure                                        | `false`     |
+| Condition                                                            | `billed`    |
+| -------------------------------------------------------------------- | ----------- |
+| Refused before sending (unpriced model, bad config, pre-aborted)     | `false`     |
+| Connection refused / DNS failure (`ECONNREFUSED`, `ENOTFOUND`…)      | `false`     |
+| HTTP 4xx (401, 403, 404, 429, other)                                 | `false`     |
+| HTTP 5xx                                                             | `undefined` |
+| Timeout, mid-flight cancellation, other network failure              | `undefined` |
+| OpenAI HTTP 200 with unusable output (bad JSON, refusal, cut off)    | `true`      |
+| Anthropic HTTP 200 with unusable output (bad JSON, refusal, cut off) | `true`      |
+| Any Ollama (local) failure                                           | `false`     |
 
 ## Ollama (`@ai-commons/provider-ollama`)
 
@@ -104,6 +105,47 @@ new OpenAIProvider({
 Pricing is supplied by the worker configuration rather than shipped as defaults,
 because provider prices change and a stale built-in table would silently
 under-budget.
+
+## Anthropic (`@ai-commons/provider-anthropic`)
+
+```ts
+new AnthropicProvider({
+  apiKey: string,                // from the OS credential store — never env/files
+  pricing: Record<model, { input_per_mtok: number; output_per_mtok: number }>,
+  baseUrl?: string,              // default https://api.anthropic.com/v1
+  inputSafetyFactor?: number,    // default 1.5, must be >= 1
+  metadataTimeoutMs?: number,    // default 15 s
+  fetch?: typeof fetch,
+});
+```
+
+- `kind: 'remote'`. Uses the Anthropic Messages API with `x-api-key`, the
+  `anthropic-version` header, and JSON-schema structured output.
+- The adapter omits temperature. Requests that explicitly set it fail locally
+  before spending because current Claude models may reject that parameter.
+- The adapter removes schema constraints Anthropic's structured-output grammar
+  does not support; the worker still validates returned values against the
+  original project schema. Use a model that supports structured outputs.
+- **Only priced models run.** Set a model's current per-million-token input and
+  output prices in worker settings or config. Model listing intersects active
+  Anthropic models with that configured price table.
+- Actual `cost_usd` uses reported input/output token counts; if usage is missing,
+  the adapter reports the pre-request upper bound so local accounting does not
+  undercount.
+- Error details expose only Anthropic's structured error type, never free-text
+  provider messages. The API key is sent only in the TLS-protected `x-api-key`
+  header and stays in the OS credential store.
+
+Anthropic currently documents JSON-schema output through `output_config.format`;
+schema support varies by model and has limits. See the [structured outputs docs](https://docs.anthropic.com/en/docs/build-with-claude/structured-outputs)
+and [Messages API reference](https://docs.anthropic.com/en/api/messages).
+For the current Claude Haiku 5.5 model ID and pricing tiers, see Anthropic's
+[model overview](https://platform.claude.com/docs/en/models/haiku-5-5/overview)
+and [pricing](https://platform.claude.com/docs/en/about-claude/pricing). The
+example abstract workload is well below the model's 100k input-token pricing
+threshold. Haiku 5.5 currently starts at $0.10/M input and $0.50/M output for
+prompts up to that threshold; use the higher tier for larger prompts. Keep
+configured rates aligned with the model and task size.
 
 ## Remote endpoints must use TLS
 

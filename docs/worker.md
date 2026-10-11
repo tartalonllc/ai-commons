@@ -116,7 +116,7 @@ factory: async (cfg) => new OllamaProvider({ baseUrl: cfg.endpoint ?? 'http://lo
 ```ts
 factory: async (cfg, secrets) => {
   const apiKey = await secrets.get(secretAccounts.provider(cfg.id));
-  if (!apiKey) throw new Error('No API key stored; run "aicommons set-key openai"');
+  if (!apiKey) throw new Error(`No API key stored; run "aicommons set-key ${cfg.id}"`);
   return new OpenAIProvider({ apiKey, pricing: cfg.pricing });
 },
 ```

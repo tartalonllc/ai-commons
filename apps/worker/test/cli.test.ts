@@ -111,6 +111,14 @@ describe('aicommons CLI', () => {
     expect(readFileSync(context.paths.configFile, 'utf8')).not.toContain(key);
   });
 
+  it('stores Anthropic keys through the same OS secret-store command', async () => {
+    const key = 'sk-ant-test-THISISAVERYSECRETKEY';
+    const { context, out } = ctx(`${key}\n`);
+    expect(await runCli(['set-key', 'anthropic'], context)).toBe(0);
+    expect(await secrets.get(secretAccounts.provider('anthropic'))).toBe(key);
+    expect(out.join()).not.toContain(key);
+  });
+
   it('refuses keys for local providers and keys passed as arguments', async () => {
     expect(await runCli(['set-key', 'ollama'], ctx('whatever\n').context)).toBe(2);
     expect(await runCli(['set-key', 'openai', 'sk-inline-key-123'], ctx().context)).toBe(2);

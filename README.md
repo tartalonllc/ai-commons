@@ -21,12 +21,12 @@ You control exactly how much compute or API budget may be contributed.
 
 | Area                                                         | State                                                                                                                                                                                     |
 | ------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Protocol, coordinator, CLI worker, validation, dashboard     | Built and tested (430 TypeScript tests)                                                                                                                                                   |
+| Protocol, coordinator, CLI worker, validation, dashboard     | Built and tested (452 TypeScript tests)                                                                                                                                                   |
 | Local inference with Ollama                                  | Verified end to end with real `qwen3:4b` on 2–3 workers                                                                                                                                   |
 | Windows desktop worker (Tauri)                               | Built, unsigned NSIS installer, verified end to end once on the author's machine (43 Rust tests)                                                                                          |
-| Commercial provider (OpenAI)                                 | Implemented and tested against a **mocked** API only. It has never made a live call.                                                                                                      |
-| Spending limits                                              | Enforced locally and covered by randomized tests. Not yet exercised against a live paid API.                                                                                              |
-| MVP acceptance test (10 machines, 10,000 tasks, 2 providers) | **Not run yet**                                                                                                                                                                           |
+| Commercial providers (OpenAI, Anthropic)                     | OpenAI live run: 101 successful `gpt-4.1-mini` calls; Anthropic adapter and secure key setup are implemented. Its bounded preflight returned HTTP 400 before inference.                   |
+| Spending limits                                              | Enforced locally; live run stayed under the USD 0.25/day and USD 5/month caps.                                                                                                            |
+| MVP acceptance test (10 machines, 10,000 tasks, 2 providers) | Partial local run: 127/9,987 tasks completed on one machine; full acceptance remains.                                                                                                     |
 | Public coordinator / hosted service                          | **None.** You run your own coordinator.                                                                                                                                                   |
 | macOS / Linux                                                | The CLI worker and coordinator are written to be portable, and CI is set up for Linux and Windows, but it runs for the first time with this publication. There's no desktop app for them. |
 
@@ -102,7 +102,7 @@ See [docs/security.md](./docs/security.md) for the full threat model.
 
 ## Can it spend unlimited money?
 
-**No, by design, though live spending hasn't been tested yet (see the status table).**
+**No, by design.** A bounded OpenAI live run stayed within locally enforced spending caps; the Anthropic preflight stopped before inference and incurred no model usage.
 
 - Limits are enforced **on your machine**, not by the coordinator. The default is
   $0/day and $0/month, which means no paid calls.
@@ -226,7 +226,7 @@ distinct workers to reach consensus.
 | ---------------------- | -------------------------------------------------------------------- |
 | `packages/protocol`    | Shared wire schemas and types (TypeBox / JSON Schema)                |
 | `packages/validators`  | Input, output and project-schema checks; consensus                   |
-| `packages/providers/*` | Provider adapters: `core` interface, `ollama`, `openai`              |
+| `packages/providers/*` | Provider adapters: `core` interface, `ollama`, `openai`, `anthropic` |
 | `packages/project-sdk` | `defineProject`, admin client, JSONL loader                          |
 | `apps/coordinator`     | Fastify + PostgreSQL coordinator (leasing, validation, accounting)   |
 | `apps/worker`          | Volunteer worker: CLI (`aicommons`) and the desktop app's daemon     |

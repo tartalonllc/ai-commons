@@ -25,7 +25,7 @@ arXiv metadata, including abstracts, is released under CC0.
 with the script below.
 
 Fetch a larger dataset (defaults to 10,000). The script paces requests 3 s
-apart, per arXiv's API guidelines:
+apart, per arXiv's API guidelines. It resumes from an existing JSONL file, skips duplicate IDs, and honors `Retry-After` when the API rate-limits a request:
 
 ```sh
 pnpm build   # from the repo root, once
@@ -43,7 +43,7 @@ COORDINATOR_URL=http://localhost:3000 ADMIN_TOKEN=... \
 ```
 
 The script creates the project, or continues if it already exists. It then
-ingests tasks in batches of 1,000, skipping and reporting any record that fails
+ingests tasks in batches of 250 to stay under the coordinator request-size limit, skipping and reporting any record that fails
 the input schema. Scripts run on Node ≥ 22.18 using native TypeScript type
 stripping, so no build step or `tsx` is needed.
 

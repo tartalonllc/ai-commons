@@ -62,6 +62,13 @@ function enableOpenAI(form: HTMLFormElement): void {
   setValue(form, 'openai.output_price', '0.6');
 }
 
+function enableAnthropic(form: HTMLFormElement): void {
+  setChecked(form, 'anthropic.enabled', true);
+  setValue(form, 'anthropic.model', 'claude-haiku-test');
+  setValue(form, 'anthropic.input_price', '1');
+  setValue(form, 'anthropic.output_price', '5');
+}
+
 beforeEach(() => document.body.replaceChildren());
 
 describe('readSettingsForm', () => {
@@ -136,6 +143,25 @@ describe('readSettingsForm', () => {
       'open-literature-demo',
       'climate-notes',
     ]);
+  });
+
+  it('configures Anthropic with an explicit model price', () => {
+    const { form } = mount();
+    setChecked(form, 'anthropic.enabled', true);
+    expect(readSettingsForm(form, config())).toMatchObject({
+      ok: false,
+      error: expect.stringMatching(/Anthropic needs a model and its prices/),
+    });
+    enableAnthropic(form);
+    const result = readSettingsForm(form, config());
+    if (!result.ok) throw new Error(result.error);
+    expect(result.config.providers.find((p) => p.id === 'anthropic')).toEqual({
+      id: 'anthropic',
+      kind: 'remote',
+      enabled: true,
+      models: [{ name: 'claude-haiku-test' }],
+      pricing: { 'claude-haiku-test': { input_per_mtok: 1, output_per_mtok: 5 } },
+    });
   });
 
   it('rejects a zero price for a paid model', () => {
@@ -430,6 +456,22 @@ describe('renderSettings', () => {
     submit(form);
     await flush();
     expect(JSON.stringify(saved)).not.toContain(KEY);
+  });
+
+  it('stores and removes Anthropic keys through the secure key handlers', async () => {
+    const { form, keys, deletedKeys } = mount();
+    const input = $<HTMLInputElement>(form, '[data-key-input][data-provider="anthropic"]');
+    input.value = KEY;
+    $(form, '[data-action="save-key-anthropic"]').click();
+    await flush();
+    expect(keys).toEqual([['anthropic', KEY]]);
+    expect(input.value).toBe('');
+    expect($(form, '#anthropic-key-state').textContent).toBe('Key stored ✓');
+
+    $(form, '[data-action="remove-key-anthropic"]').click();
+    await flush();
+    expect(deletedKeys).toEqual(['anthropic']);
+    expect($(form, '#anthropic-key-state').textContent).toBe('No key stored');
   });
 
   it('saves the key on Enter without submitting the form', async () => {

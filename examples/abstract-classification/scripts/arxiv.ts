@@ -52,3 +52,14 @@ export function parseArxivFeed(xml: string): AbstractRecord[] {
   }
   return records;
 }
+
+/** Parse an HTTP Retry-After value, bounding waits to five minutes. */
+export function retryDelayMs(retryAfter: string | null, attempt: number): number {
+  if (retryAfter) {
+    const seconds = Number(retryAfter);
+    if (Number.isFinite(seconds) && seconds >= 0) return Math.min(seconds * 1_000, 5 * 60_000);
+    const date = Date.parse(retryAfter);
+    if (Number.isFinite(date)) return Math.min(Math.max(0, date - Date.now()), 5 * 60_000);
+  }
+  return Math.min(30_000 * attempt, 5 * 60_000);
+}
